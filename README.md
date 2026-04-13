@@ -1,5 +1,7 @@
 # beebridge
 
+**Website**: <https://aibeebridge.pages.dev/>
+
 **beebridge** is a monorepo for an AI planner and worker stack that completes tasks through **browser automation** (Flower / Chrome DevTools Protocol). The **gateway** orchestrates jobs and CDP tools; the **web app** is the dashboard; the **CLI** can manage gateway/web processes; the **Flower** MV3 extension bridges `chrome.debugger` to a loopback relay. Optional **Waggle mode** pairs a worker model with a supervisor channel (browser AI tab or API) -- see [`docs/guides/waggle-mode.md`](docs/guides/waggle-mode.md).
 
 ## Vision
@@ -50,7 +52,7 @@ Full dependency notes: [`INSTALL.md`](INSTALL.md).
 ## Installation
 
 ```bash
-git clone https://github.com/newaibridge/beebridge.git
+git clone https://github.com/aibeebridge/beebridge.git
 cd beebridge
 
 npm install
