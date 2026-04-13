@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["DOM", "ES2022"],
+    "types": ["chrome"]
+  },
+  "include": ["src/**/*"]
+}

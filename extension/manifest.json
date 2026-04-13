@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "beebridge Flower",
+  "version": "0.4.0",
+  "description": "beebridge Browser Worker — Bee tasks via browser automation",
+  "permissions": ["tabs", "scripting", "activeTab", "storage", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "beebridge Flower",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

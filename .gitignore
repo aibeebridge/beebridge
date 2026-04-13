@@ -1,0 +1,33 @@
+node_modules/
+dist/
+.next/
+coverage/
+.DS_Store
+*.log
+
+# Persistent data (contains auth tokens/secrets)
+.beebridge-data/
+.beebridge-daemon/
+
+# Environment files (may contain API keys, tokens)
+.env
+.env.*
+.env.local
+.env.production
+.env.development
+
+# Credentials & secrets
+*.pem
+*.key
+*.cert
+*.p12
+credentials.json
+secrets.json
+**/service-account*.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db

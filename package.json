@@ -1,0 +1,31 @@
+{
+  "name": "beebridge",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "bin": {
+    "beebridge": "./beebridge.mjs"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "beebridge": "node beebridge.mjs",
+    "link:global": "npm link",
+    "build": "npm run --workspaces build",
+    "build:cli": "npm --workspace @beebridge/cli run build",
+    "dev:gateway": "npm --workspace @beebridge/gateway run dev",
+    "dev:web": "npm --workspace @beebridge/web run dev",
+    "start:web": "npm --workspace @beebridge/web run start",
+    "dev:cli": "npm --workspace @beebridge/cli run dev",
+    "gateway:start": "node beebridge.mjs gateway start",
+    "gateway:restart": "node beebridge.mjs gateway restart",
+    "gateway:start:daemon": "node beebridge.mjs gateway start --daemon",
+    "gateway:restart:daemon": "node beebridge.mjs gateway restart --daemon",
+    "web:start": "node beebridge.mjs web start",
+    "web:restart": "node beebridge.mjs web restart",
+    "web:start:daemon": "node beebridge.mjs web start --daemon",
+    "web:restart:daemon": "node beebridge.mjs web restart --daemon"
+  }
+}

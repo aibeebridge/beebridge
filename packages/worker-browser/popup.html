@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 16px;
+      background: #fff;
+      color: #1a1a2e;
+    }
+    h1 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .status {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 12px;
+      font-size: 12px; font-weight: 500;
+    }
+    .status.connected { background: #e4f8ea; color: #148a42; }
+    .status.disconnected { background: #ffe8ed; color: #d2334f; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.on { background: #148a42; }
+    .dot.off { background: #d2334f; }
+    label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 13px; color: #666; }
+    input {
+      padding: 8px; border-radius: 6px; border: 1px solid #ddd;
+      font-size: 13px; color: #1a1a2e;
+    }
+    button {
+      width: 100%; padding: 8px; border-radius: 8px;
+      border: none; background: #2b72ff; color: #fff;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      margin-top: 4px;
+    }
+    button:hover { background: #1a5fe0; }
+    .info { margin-top: 12px; font-size: 12px; color: #888; }
+    .info p { margin-bottom: 4px; }
+    hr { border: none; border-top: 1px solid #eee; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>beebridge Flower</h1>
+  <div id="statusBadge" class="status disconnected">
+    <span id="statusDot" class="dot off"></span>
+    <span id="statusText">Disconnected</span>
+  </div>
+
+  <hr>
+
+  <label>
+    Gateway URL
+    <input id="gwUrl" type="text" placeholder="ws://localhost:4321/ws">
+  </label>
+  <label>
+    Token
+    <input id="gwToken" type="password" placeholder="dev-token">
+  </label>
+  <button id="saveBtn">Save &amp; Reconnect</button>
+
+  <div class="info" id="info"></div>
+
+  <script src="dist/popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 16px;
+      background: #fff;
+      color: #1a1a2e;
+    }
+    .header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .header h1 { font-size: 16px; font-weight: 700; }
+    .logo { width: 24px; height: 24px; background: #2b72ff; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 12px; }
+    .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .status {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 20px;
+      font-size: 12px; font-weight: 500;
+    }
+    .status.connected { background: #e4f8ea; color: #148a42; }
+    .status.disconnected { background: #ffe8ed; color: #d2334f; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.on { background: #148a42; animation: pulse 1.5s infinite; }
+    .dot.off { background: #d2334f; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; color: #888; font-weight: 500; }
+    input {
+      padding: 9px 12px; border-radius: 8px; border: 1px solid #e0e0e0;
+      font-size: 13px; color: #1a1a2e; background: #fafafa;
+      transition: border .2s;
+    }
+    input:focus { outline: none; border-color: #2b72ff; background: #fff; }
+    button {
+      width: 100%; padding: 10px; border-radius: 8px;
+      border: none; background: #2b72ff; color: #fff;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      margin-top: 6px; transition: background .2s;
+    }
+    button:hover { background: #1a5fe0; }
+    button:active { background: #1550c0; }
+    .info { margin-top: 14px; padding-top: 14px; border-top: 1px solid #f0f0f0; font-size: 12px; color: #888; }
+    .info p { margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .info strong { color: #1a1a2e; font-weight: 500; }
+    .job-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      background: #e8f0ff; color: #2b72ff; font-size: 11px; font-weight: 600;
+    }
+    hr { border: none; border-top: 1px solid #f0f0f0; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">AB</div>
+    <h1>beebridge Flower</h1>
+  </div>
+
+  <div class="status-row">
+    <div id="statusBadge" class="status disconnected">
+      <span id="statusDot" class="dot off"></span>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </div>
+
+  <hr>
+
+  <div id="gatewayWarn" style="display:none;background:#fff8e6;border:1px solid #f0d78c;color:#6b4e00;padding:10px 12px;border-radius:8px;font-size:11px;line-height:1.45;margin-bottom:12px;"></div>
+
+  <label>
+    Gateway URL
+    <input id="gwUrl" type="text" placeholder="ws://localhost:4321/ws" spellcheck="false">
+  </label>
+  <label>
+    CDP relay URL (loopback DevTools bridge)
+    <input id="relayWsUrl" type="text" placeholder="ws://127.0.0.1:4323" spellcheck="false">
+  </label>
+  <label>
+    Token
+    <input id="gwToken" type="password" placeholder="dev-token">
+  </label>
+  <button id="saveBtn">Save &amp; Reconnect</button>
+  <button id="attachBtn" type="button" style="background:#148a42;margin-top:10px;">Attach DevTools to this tab</button>
+  <p style="font-size:11px;color:#666;margin-top:6px;">Use a normal <strong>https://</strong> tab (not New Tab / chrome://). Tasks need gateway + relay <strong>ok</strong>, then Attach (badge ON).</p>
+
+  <div class="info" id="info"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

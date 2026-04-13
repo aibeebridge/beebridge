@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "beebridge Browser Worker",
+  "version": "0.2.0",
+  "description": "beebridge Flower — browser automation worker for Bee tasks",
+  "permissions": ["tabs", "scripting", "activeTab", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "beebridge Flower"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["dist/content-gpt.js"]
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["dist/content-claude.js"]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content-universal.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@beebridge/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}
