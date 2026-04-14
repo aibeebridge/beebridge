@@ -111,7 +111,7 @@ export function parseGatewayJsonBody(text: string, pathForError: string): unknow
   throw new Error(`Gateway returned invalid JSON (${pathForError}): ${trimmed.slice(0, 160)}`);
 }
 
-/** Used when `url` is empty: browser hits same-origin `/api` (Next rewrite → gateway). WS still connects here. */
+/** Used when `url` is empty: browser hits same-origin `/api` and `/ws` (Next rewrites → gateway). */
 export const FALLBACK_GATEWAY_ORIGIN =
   typeof process !== "undefined" && process.env.NEXT_PUBLIC_GATEWAY_ORIGIN
     ? process.env.NEXT_PUBLIC_GATEWAY_ORIGIN.replace(/\/$/, "")
@@ -145,10 +145,13 @@ export function gatewayWsUrl(urlState: string, token: string): string {
     return `${ws}/ws?token=${encodeURIComponent(token)}`;
   }
   if (typeof window !== "undefined") {
-    const host = window.location.hostname;
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const port = process.env.NEXT_PUBLIC_GATEWAY_WS_PORT ?? "4321";
-    return `${proto}://${host}:${port}/ws?token=${encodeURIComponent(token)}`;
+    const host = window.location.host;
+    if (process.env.NEXT_PUBLIC_GATEWAY_WS_PORT) {
+      const p = process.env.NEXT_PUBLIC_GATEWAY_WS_PORT;
+      return `${proto}://${window.location.hostname}:${p}/ws?token=${encodeURIComponent(token)}`;
+    }
+    return `${proto}://${host}/ws?token=${encodeURIComponent(token)}`;
   }
   const base = FALLBACK_GATEWAY_ORIGIN.replace(/\/$/, "");
   const ws = base.replace(/^https/, "wss").replace(/^http/, "ws");
@@ -168,7 +171,7 @@ interface GatewayContextValue {
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
 export function GatewayProvider({ children }: { children: ReactNode }) {
-  /** Empty = same-origin `/api` + `/health` via Next rewrites → gateway (see next.config.ts). */
+  /** Empty = same-origin `/api`, `/health`, `/ws` via Next rewrites → gateway (see next.config.ts). */
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("dev-token");
   const [connected, setConnected] = useState(false);

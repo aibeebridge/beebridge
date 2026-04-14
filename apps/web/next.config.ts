@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
-/** Proxy API + health to the real gateway so browser can use same-origin `/api/*` (avoids wrong port / CORS confusion). */
+/**
+ * Proxy API, health, and WebSocket to the real gateway so the browser can use a single origin
+ * (same port as the Next app). SSH port-forward only that port; no separate WS port.
+ */
 const gatewayOrigin = process.env.BEEBRIDGE_GATEWAY_ORIGIN ?? "http://127.0.0.1:4321";
 
 const nextConfig: NextConfig = {
@@ -15,6 +18,7 @@ const nextConfig: NextConfig = {
     return [
       { source: "/health", destination: `${gatewayOrigin}/health` },
       { source: "/api/:path*", destination: `${gatewayOrigin}/api/:path*` },
+      { source: "/ws", destination: `${gatewayOrigin}/ws` },
     ];
   },
 };
