@@ -1,5 +1,7 @@
 # beebridge CLI
 
+**Project site:** <https://aibeebridge.pages.dev/>
+
 The CLI lives in [`apps/cli`](../../apps/cli) and is loaded from the repo root via [`beebridge.mjs`](../../beebridge.mjs).
 
 ## Prerequisites

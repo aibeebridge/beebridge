@@ -29,7 +29,7 @@ Gateway (Node)                    Extension (Flower)                 Chrome tab
 
 - **Gateway** (`apps/gateway`) -- Express + WebSockets: jobs/history, chat routing, optional Discord hooks, codegen/code-executor paths, CDP relay and browser agent loop (including Waggle).
 - **Web UI** (`apps/web`) -- Next.js: bridges, jobs, flowers UI, settings.
-- **CLI** (`apps/cli`) -- Invoked via repo-root `beebridge.mjs` after `npm run build:cli` (see [Running](#running)).
+- **CLI** (`apps/cli`) -- Invoked via repo-root `beebridge.mjs` after `npm run build:cli`; starts **compiled** gateway and **production** Next.js by default, with `--dev` for `tsx` / `next dev`, plus `stop`, `gateway token`, onboarding, and a keyboard TUI (see [CLI](#cli) and [`docs/guides/cli.md`](docs/guides/cli.md)).
 - **Chrome extension** (`extension/`) -- Relay + debugger attach; use the popup **Attach DevTools to this tab** so the badge shows **ON**.
 
 ## Documentation
@@ -57,24 +57,18 @@ cd beebridge
 
 npm install
 
-# Required before first gateway/web run
-npm run build --workspace=packages/shared
-npm run build --workspace=packages/core
-npm run build --workspace=@beebridge/gateway
+# Full workspace build (gateway dist + Next.js .next + shared packages). Required before production gateway/web.
+npm run build
 
-# Optional: global-style CLI entry at repo root (`node beebridge.mjs ...`)
+# CLI entrypoint at repo root (`node beebridge.mjs ...`)
 npm run build:cli
 ```
 
+You can build individual workspaces instead (e.g. only `packages/shared`, `packages/core`, `@beebridge/gateway`) when iterating, but **`beebridge gateway start` / `web start` without `--dev` expect a full build** — see [`docs/guides/cli.md`](docs/guides/cli.md).
+
 ## Running
 
-**Production (default for CLI):** `beebridge gateway start` and `beebridge web start` run the compiled gateway (`node dist/...`) and `next start`. Build first from the repo root:
-
-```bash
-npm run build
-```
-
-Then start services (or use `npm run start:gateway` / `npm run start:web`). For TypeScript / `next dev` without a production build, use `--dev` (e.g. `node beebridge.mjs gateway start --dev`).
+**Defaults:** CLI `gateway` / `web` commands run **`npm run start:gateway`** (compiled `node dist/...`) and **`npm run start:web`** (`next start`). Pass **`--dev`** to use **`dev:gateway`** (tsx) or **`dev:web`** (`next dev`) without requiring those production artifacts.
 
 ### Gateway (API + WebSocket + CDP relay)
 
@@ -92,14 +86,27 @@ npm run start:web
 # Default: http://localhost:3000
 ```
 
-### CLI (after `npm run build:cli`)
+### CLI
+
+Requires **`npm run build:cli`**. Run from the repo root as `node beebridge.mjs …` or `npm run beebridge -- …`. Full reference: [`docs/guides/cli.md`](docs/guides/cli.md).
+
+| Command | Purpose |
+|---------|---------|
+| `gateway start` \| `restart` | Production gateway (`start:gateway`). **`--dev`** → `dev:gateway`. **`--daemon`** → background; logs under `.beebridge-daemon/gateway-<port>.log` |
+| `web start` \| `restart` | Production web (`start:web`). **`--dev`** → `dev:web`. **`--daemon`**, **`--open`** (open `/dashboard`) |
+| `web settings`, `manager setup` | Open **Settings** in the browser; **`--dev`** optional |
+| `stop` | **`SIGTERM`** anything listening on **4321** (gateway) and **3000** (web); override with **`--gateway-port`** / **`--web-port`** |
+| `gateway token` | Print the current gateway auth token (same file as `~/.beebridge/gateway-token` when auto-generated) |
+| `onboard` | First-time PM auth / model setup |
+| _(no args)_ or `tui` | Keyboard-driven terminal UI |
+
+Convenience npm scripts in the root `package.json` mirror these (e.g. `gateway:start:daemon`, `web:start:daemon`).
 
 ```bash
 node beebridge.mjs gateway start
 node beebridge.mjs web start
-node beebridge.mjs stop   # SIGTERM listeners on ports 4321 (gateway) and 3000 (web); optional --gateway-port / --web-port
-# Add --dev for npm run dev:gateway / dev:web instead of production.
-# Daemon variants: see root package.json (`gateway:start:daemon`, `web:start:daemon`, etc.)
+node beebridge.mjs stop
+# Add --dev to either start/restart for development servers instead of production.
 ```
 
 ### Chrome extension
@@ -112,6 +119,9 @@ node beebridge.mjs stop   # SIGTERM listeners on ports 4321 (gateway) and 3000 (
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `beebridge_HOME` | _(auto)_ | If set, repo root for spawned `npm run` commands from the CLI ([`repo-root.ts`](apps/cli/src/repo-root.ts)). |
+| `beebridge_GATEWAY_URL` | `http://localhost:4321` | Gateway HTTP base URL for CLI / TUI API calls. |
+| `beebridge_GATEWAY_TOKEN` | _(optional)_ | Bearer token; falls back to `GATEWAY_TOKEN` or `~/.beebridge/gateway-token`. |
 | `GATEWAY_TOKEN` | _(auto)_ | If unset, a token is generated (OpenClaw-style 48-char hex) and saved under `~/.beebridge/gateway-token`. Set this to override. |
 | `PORT` | `4321` | Gateway HTTP port |
 | `BEEBRIDGE_CDP_RELAY_PORT` | `PORT + 2` | Loopback CDP relay (e.g. `4323` when `PORT=4321`) |
@@ -122,7 +132,7 @@ node beebridge.mjs stop   # SIGTERM listeners on ports 4321 (gateway) and 3000 (
 | `OPENAI_CODEX_CLIENT_ID` / `OPENAI_CODEX_REDIRECT_URI` | see code | Optional OpenAI Codex OAuth overrides |
 | `NODE_TLS_REJECT_UNAUTHORIZED` | `1` | Set to `0` to skip TLS verification (**dev only**) |
 
-The Next.js app reads the same file on the server when `NEXT_PUBLIC_GATEWAY_TOKEN` is not set, so the dashboard usually works without manual copy-paste after the first gateway start.
+The Next.js app resolves the gateway token on the server (shared persistence and an internal API route) when `NEXT_PUBLIC_GATEWAY_TOKEN` is not set, so the dashboard usually works without manual copy-paste after the first gateway start. Use **`beebridge gateway token`** if you need the value in the terminal.
 
 More options (`.env` examples, CORS, auth mode): [`INSTALL.md`](INSTALL.md).
 

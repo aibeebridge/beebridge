@@ -10,26 +10,32 @@
 
 ## Quick Start
 
+**Public site:** <https://aibeebridge.pages.dev/>
+
 ```bash
 # 1. Clone
-git clone https://github.com/newbeebridge/BEEBRIDGE.git
-cd BEEBRIDGE
+git clone https://github.com/aibeebridge/beebridge.git
+cd beebridge
 
 # 2. Install all dependencies
 npm install
 
 # 3. Build (required before production gateway/web or CLI start)
 npm run build
-# Or minimal: build shared, core, gateway, web, and CLI as needed.
 
-# 4. Start gateway server (production)
+# 4. Build the CLI (required before `node beebridge.mjs …`)
+npm run build:cli
+
+# 5. Start gateway server (production)
 npm run start:gateway
 # Development: npm run dev:gateway
 
-# 5. Start web UI (in a new terminal)
+# 6. Start web UI (in a new terminal)
 npm run start:web
 # Development: npm run dev:web
 ```
+
+Use the **CLI** from the repo root to start/stop gateway and web together, open settings, or run the terminal UI — see [`docs/guides/cli.md`](docs/guides/cli.md) and the [CLI section in README.md](README.md#cli).
 
 ## Chrome Extension Setup
 
