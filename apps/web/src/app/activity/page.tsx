@@ -87,7 +87,7 @@ export default function ActivityPage() {
   const loadData = useCallback(async () => {
     try {
       const [auditData, convData, teamData] = await Promise.all([
-        apiFetch("/api/audit").catch(() => ({ hiveEvents: [] })),
+        apiFetch("/api/audit?limit=5000").catch(() => ({ hiveEvents: [] })),
         apiFetch("/api/jobs/conversations").catch(() => ({ conversations: [] })),
         apiFetch("/api/team").catch(() => ({ teamPlan: null })),
       ]);
@@ -104,7 +104,7 @@ export default function ActivityPage() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 10000);
+    const interval = setInterval(loadData, 15000);
     return () => clearInterval(interval);
   }, [loadData]);
 

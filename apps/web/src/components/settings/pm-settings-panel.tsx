@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { gatewayFetchUrl } from "../../context/gateway";
+import { gatewayFetchUrl, fetchWithGatewayTimeout } from "../../context/gateway";
+
+/** Gateway admin restart can take longer than normal API calls. */
+const GATEWAY_RESTART_FETCH_TIMEOUT_MS = 90_000;
 
 type ProviderAuthMode = "api_key" | "oauth";
 
@@ -153,7 +156,7 @@ export function PmSettingsPanel() {
 
   const loadSettings = useCallback(async () => {
     setError(null);
-    const response = await fetch(`${gatewayUrl}/api/settings/pm`, {
+    const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/pm`, {
       method: "GET",
       headers: authHeader(gatewayToken),
     });
@@ -191,7 +194,7 @@ export function PmSettingsPanel() {
       return;
     }
     setError(null);
-    const response = await fetch(`${gatewayUrl}/api/settings/auth/profiles`, {
+    const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/profiles`, {
       method: "POST",
       headers: authHeader(gatewayToken),
       body: JSON.stringify({
@@ -215,7 +218,7 @@ export function PmSettingsPanel() {
     setError(null);
     // Open a tab immediately in the click handler to avoid popup blockers.
     const authWindow = window.open("", "_blank");
-    const startResponse = await fetch(`${gatewayUrl}/api/settings/auth/device/start`, {
+    const startResponse = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/device/start`, {
       method: "POST",
       headers: authHeader(gatewayToken),
       body: JSON.stringify({
@@ -264,7 +267,7 @@ export function PmSettingsPanel() {
     setDeviceFlow((prev) => prev ? { ...prev, polling: true, pollStatus: "Checking authorization..." } : prev);
 
     const poll = async (): Promise<boolean> => {
-      const res = await fetch(`${gatewayUrl}/api/settings/auth/device/complete`, {
+      const res = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/device/complete`, {
         method: "POST",
         headers: authHeader(gatewayToken),
         body: JSON.stringify({ sessionId }),
@@ -332,7 +335,7 @@ export function PmSettingsPanel() {
     } else {
       bodyPayload.authCode = deviceFlow.authCode.trim();
     }
-    const completeResponse = await fetch(`${gatewayUrl}/api/settings/auth/device/complete`, {
+    const completeResponse = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/device/complete`, {
       method: "POST",
       headers: authHeader(gatewayToken),
       body: JSON.stringify(bodyPayload),
@@ -359,7 +362,7 @@ export function PmSettingsPanel() {
     async (profile: PmAuthProfile) => {
       setError(null);
 
-      const activateRes = await fetch(`${gatewayUrl}/api/settings/auth/profiles/${profile.id}/activate`, {
+      const activateRes = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/profiles/${profile.id}/activate`, {
         method: "PATCH",
         headers: authHeader(gatewayToken),
       });
@@ -370,7 +373,7 @@ export function PmSettingsPanel() {
 
       const provider = settings?.providers.find((p) => p.id === profile.providerId);
       if (provider && provider.models.length > 0) {
-        const policyRes = await fetch(`${gatewayUrl}/api/settings/model-policy`, {
+        const policyRes = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/model-policy`, {
           method: "PUT",
           headers: authHeader(gatewayToken),
           body: JSON.stringify({
@@ -396,7 +399,7 @@ export function PmSettingsPanel() {
   const onDeleteProfile = useCallback(
     async (profileId: string) => {
       setError(null);
-      const response = await fetch(`${gatewayUrl}/api/settings/auth/profiles/${profileId}`, {
+      const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/profiles/${profileId}`, {
         method: "DELETE",
         headers: authHeader(gatewayToken),
       });
@@ -417,7 +420,7 @@ export function PmSettingsPanel() {
     if (!confirmed) return;
 
     setError(null);
-    const response = await fetch(`${gatewayUrl}/api/settings/auth/profiles`, {
+    const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/auth/profiles`, {
       method: "DELETE",
       headers: authHeader(gatewayToken),
     });
@@ -439,7 +442,7 @@ export function PmSettingsPanel() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    const response = await fetch(`${gatewayUrl}/api/settings/model-policy`, {
+    const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/model-policy`, {
       method: "PUT",
       headers: authHeader(gatewayToken),
       body: JSON.stringify({
@@ -467,7 +470,7 @@ export function PmSettingsPanel() {
 
   const loadWorkspaceInfo = useCallback(async () => {
     try {
-      const res = await fetch(`${gatewayUrl}/api/settings/workspace`, {
+      const res = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/workspace`, {
         headers: authHeader(gatewayToken),
       });
       if (res.ok) {
@@ -498,10 +501,10 @@ export function PmSettingsPanel() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(gatewayFetchUrl(gatewayUrl, "/api/admin/restart"), {
+      const res = await fetchWithGatewayTimeout(gatewayFetchUrl(gatewayUrl, "/api/admin/restart"), {
         method: "POST",
         headers: authHeader(gatewayToken),
-      });
+      }, GATEWAY_RESTART_FETCH_TIMEOUT_MS);
       const data = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
       if (!res.ok) {
         setError(data?.error ?? `Restart request failed (${res.status}).`);
@@ -520,7 +523,7 @@ export function PmSettingsPanel() {
     setWsLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${gatewayUrl}/api/settings/workspace`, {
+      const res = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/workspace`, {
         method: "PUT",
         headers: authHeader(gatewayToken),
         body: JSON.stringify({ workspacePath: newWsPath }),

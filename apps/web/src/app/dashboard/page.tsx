@@ -39,7 +39,7 @@ export default function DashboardPage() {
       try {
         const [approvals, audit, flowers, pm] = await Promise.all([
           apiFetch("/api/approvals").catch(() => ({ pendingBeeApprovals: [], approvedBeeJobs: [] })),
-          apiFetch("/api/audit").catch(() => ({ hiveEvents: [] })),
+          apiFetch("/api/audit?limit=200").catch(() => ({ hiveEvents: [] })),
           apiFetch("/api/flowers/connected").catch(() => ({ flowers: [] })),
           apiFetch("/api/settings/pm").catch(() => ({ modelPolicy: {} })),
         ]);

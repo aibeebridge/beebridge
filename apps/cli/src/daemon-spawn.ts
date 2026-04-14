@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { resolveBeebridgeRepoRoot } from "./repo-root.js";
+import { envForNextWebDev } from "./web-dev-env.js";
 
 export type DaemonLabel = "gateway" | "web";
 
@@ -25,7 +26,10 @@ export function spawnNpmDaemon(options: {
   fs.appendFileSync(logPath, stamp);
 
   const logFd = fs.openSync(logPath, "a");
-  const env = { ...process.env, PORT: String(options.port) };
+  const env =
+    options.npmScript === "dev:web"
+      ? envForNextWebDev(options.port)
+      : { ...process.env, PORT: String(options.port) };
 
   const child = spawn("npm", ["run", options.npmScript], {
     cwd: repoRoot,

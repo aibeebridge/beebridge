@@ -3,6 +3,7 @@ import process from "node:process";
 import { spawnNpmDaemon } from "../daemon-spawn.js";
 import { stopProcessOnPort } from "../port-utils.js";
 import { resolveBeebridgeRepoRoot } from "../repo-root.js";
+import { envForNextWebDev } from "../web-dev-env.js";
 
 /** Must match `SettingsTab` in web `pm-settings-panel.tsx` (URL `?tab=`). */
 type SettingsTab = "connection" | "auth" | "model" | "workspace" | "status";
@@ -49,7 +50,7 @@ async function startWebUiWithPath(options: {
   }
 
   const repoRoot = resolveBeebridgeRepoRoot();
-  const env = { ...process.env, PORT: String(port) };
+  const env = envForNextWebDev(port);
 
   if (options.open) {
     setTimeout(() => openInBrowser(`http://localhost:${port}${options.openPath}`), 1200);

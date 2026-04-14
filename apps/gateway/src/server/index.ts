@@ -1040,10 +1040,18 @@ app.post("/api/approvals/:taskId/approve", requireAuth, (req, res) => {
   res.json({ approvedBeeJob: approved });
 });
 
-app.get("/api/audit", requireAuth, (_req, res) => {
+app.get("/api/audit", requireAuth, (req, res) => {
   const events = auditLog.list();
-  log("AUDIT", `returning ${events.length} events`);
-  res.json({ hiveEvents: events });
+  const raw = req.query.limit;
+  let limit = 0;
+  if (raw !== undefined) {
+    const n = Number(Array.isArray(raw) ? raw[0] : raw);
+    if (Number.isFinite(n) && n > 0) limit = Math.min(Math.floor(n), 10000);
+  }
+  /** auditLog.list() is newest-first; keep the most recent `limit` entries. */
+  const slice = limit > 0 ? events.slice(0, limit) : events;
+  log("AUDIT", `returning ${slice.length} events${limit ? ` (limit ${limit})` : ""}`);
+  res.json({ hiveEvents: slice });
 });
 
 app.get("/api/flowers", requireAuth, (_req, res) => {

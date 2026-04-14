@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useGateway, parseGatewayJsonBody, gatewayHealthUrl } from "../context/gateway";
+import {
+  useGateway,
+  parseGatewayJsonBody,
+  gatewayHealthUrl,
+  fetchWithGatewayTimeout,
+  GATEWAY_HEALTH_TIMEOUT_MS,
+} from "../context/gateway";
 
 export function DevBadge() {
   const [open, setOpen] = useState(false);
@@ -11,9 +17,9 @@ export function DevBadge() {
 
   useEffect(() => {
     if (!open || !connected) return;
-    fetch(gatewayHealthUrl(url), {
+    fetchWithGatewayTimeout(gatewayHealthUrl(url), {
       headers: { Authorization: "Bearer dev-token" },
-    })
+    }, GATEWAY_HEALTH_TIMEOUT_MS)
       .then((r) => r.text())
       .then((t) => {
         try {

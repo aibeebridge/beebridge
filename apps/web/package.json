@@ -6,6 +6,7 @@
     "clean": "rm -rf .next",
     "clean:cache": "rm -rf ../../node_modules/.cache",
     "dev": "next dev",
+    "start": "next start",
     "dev:fresh": "npm run clean && next dev",
     "build": "next build",
     "build:clean": "npm run clean && next build",
