@@ -72,6 +72,19 @@ function defaultDistrictFromTask(task: BeeTask): BeeDistrict {
 
 const DEFAULT_BRIDGE_GRAPH_META: BridgeGraphMeta = { startDistrictId: null };
 
+const WORKSPACE_LOAD_PERF =
+  process.env.BEEBRIDGE_GATEWAY_PERF_LOG === "1" || process.env.BEEBRIDGE_GATEWAY_PERF_LOG === "true";
+
+function workspaceLoadPerf(label: string, t0: number, segmentStart: number): number {
+  if (!WORKSPACE_LOAD_PERF) return segmentStart;
+  const now = performance.now();
+  const seg = (now - segmentStart).toFixed(1);
+  const cum = (now - t0).toFixed(1);
+  const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+  console.log(`[${ts}] [PERF] workspace.load:${label} segment ${seg}ms (cumulative ${cum}ms)`);
+  return now;
+}
+
 export class WorkspaceStore {
   private readonly root: string;
   private readonly districtsDir: string;
@@ -100,6 +113,9 @@ export class WorkspaceStore {
   }
 
   load(): WorkspaceSnapshot {
+    const t0 = performance.now();
+    let mark = t0;
+
     const latestTeamPlan = readJsonFile<TeamPlan | null>(this.teamPlanFile, null);
     const schedules = readJsonFile<Record<string, TaskSchedule>>(this.schedulesFile, {});
     const bridges = readJsonFile<DistrictBridge[]>(this.bridgesFile, []);
@@ -120,13 +136,18 @@ export class WorkspaceStore {
       this.conversationArchivesFile,
       {},
     );
+    mark = workspaceLoadPerf("json: teamPlan schedules bridges meta conversations archives", t0, mark);
+
     const auditEvents = readJsonFile<AuditEvent[]>(this.auditFile, []);
+    mark = workspaceLoadPerf("json: activity/audit.json", t0, mark);
 
     let districts = readJsonFile<BeeDistrict[]>(this.districtsIndex, []);
 
     if (districts.length === 0 && latestTeamPlan?.districts) {
       districts = latestTeamPlan.districts;
     }
+
+    mark = workspaceLoadPerf("json: districts-index", t0, mark);
 
     const tasks: BeeTask[] = [];
     if (fs.existsSync(this.districtsDir)) {
@@ -138,6 +159,8 @@ export class WorkspaceStore {
         tasks.push(...districtTasks);
       }
     }
+
+    workspaceLoadPerf("districts/*/tasks.json scan", t0, mark);
 
     return {
       latestTeamPlan,

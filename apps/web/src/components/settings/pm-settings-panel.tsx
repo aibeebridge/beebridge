@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { gatewayFetchUrl, fetchWithGatewayTimeout } from "../../context/gateway";
+import { useGateway, gatewayFetchUrl, fetchWithGatewayTimeout } from "../../context/gateway";
 
 /** Gateway admin restart can take longer than normal API calls. */
 const GATEWAY_RESTART_FETCH_TIMEOUT_MS = 90_000;
@@ -90,8 +90,9 @@ function autoPollWaitingLabel(providerId: string, verificationUri: string): stri
 }
 
 export function PmSettingsPanel() {
+  const { token: appGatewayToken } = useGateway();
   const [gatewayUrl, setGatewayUrl] = useState("http://localhost:4321");
-  const [gatewayToken, setGatewayToken] = useState("dev-token");
+  const [gatewayToken, setGatewayToken] = useState(() => appGatewayToken);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -321,7 +322,7 @@ export function PmSettingsPanel() {
     if (!deviceFlow.authCode?.trim()) {
       setError(
         providerId === "openai"
-          ? "로그인 후 리다이렉트된 URL을 붙여넣어 주세요."
+          ? "Please paste the redirect URL from after login."
           : "Please enter the callback code or token.",
       );
       return;
@@ -492,7 +493,7 @@ export function PmSettingsPanel() {
   const onRestartGateway = useCallback(async () => {
     if (
       !window.confirm(
-        "This will shut down the gateway process. You may need to start it again (e.g. npm run dev:gateway). Continue?",
+        "This will shut down the gateway process. You may need to start it again (e.g. beebridge gateway start or npm run start:gateway). Continue?",
       )
     ) {
       return;
@@ -667,14 +668,14 @@ export function PmSettingsPanel() {
               )}
               {deviceFlow && (
                 <div className="device-flow-card" ref={deviceFlowCardRef}>
-                  <h4>{providerId === "openai" ? "OpenAI Codex 로그인" : "Complete OAuth login"}</h4>
+                  <h4>{providerId === "openai" ? "OpenAI Codex Login" : "Complete OAuth login"}</h4>
                   <p>
                     {deviceFlow.autoPolling
                       ? providerId === "github-copilot"
                         ? "A new tab has been opened. Enter the code below on GitHub and authorize access."
                         : "A new tab has been opened to the provider. Complete authorization there, then return here."
                       : providerId === "openai"
-                        ? "새 탭에서 OpenAI 로그인을 완료하세요. 로그인이 끝나면 브라우저가 localhost 주소로 리다이렉트됩니다 (페이지가 안 뗄 수 있습니다). 그때 주소창의 전체 URL을 복사해서 아래에 붙여넣으세요."
+                        ? "Complete the OpenAI login in the new tab. After login, the browser will redirect to a localhost URL (the page may not load). Copy the full URL from the address bar and paste it below."
                         : providerId === "anthropic" || providerId === "google"
                           ? "A new tab has the provider key/console page. Copy your API key and paste it below, then click Complete login. (Or use Sign-in mode: API key and Save profile.)"
                           : "A new tab has been opened. If the provider shows a device or callback code, enter it below; otherwise paste the API key or token Beebridge should use."}
@@ -686,7 +687,7 @@ export function PmSettingsPanel() {
                     </div>
                   ) : providerId === "openai" ? (
                     <div className="device-code-display device-oauth-redirect" style={{ textAlign: "left" }}>
-                      <span className="device-code-label">예시) 리다이렉트된 URL 형태:</span>
+                      <span className="device-code-label">Example redirect URL format:</span>
                       <code className="device-code-value device-code-value--break" style={{ color: "var(--muted)", fontSize: "11px" }}>
                         {"http://localhost:1455/auth/callback?code=abc123&state=xyz"}
                       </code>
@@ -701,7 +702,7 @@ export function PmSettingsPanel() {
                     If the tab didn&apos;t open,{" "}
                     <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer">
                       {providerId === "openai"
-                        ? "OpenAI 로그인 페이지 열기"
+                        ? "Open OpenAI login page"
                         : providerId === "github-copilot"
                           ? "open the GitHub device page"
                           : "open the provider page"}
@@ -711,7 +712,7 @@ export function PmSettingsPanel() {
                   {!deviceFlow.autoPolling && (
                     <label>
                       {providerId === "openai"
-                        ? "리다이렉트된 URL 붙여넣기"
+                        ? "Paste the redirect URL"
                         : providerId === "anthropic" || providerId === "google"
                           ? "API key (paste here)"
                           : "Callback code / token"}
@@ -743,7 +744,7 @@ export function PmSettingsPanel() {
                             ? "I\u2019ve authorized on GitHub"
                             : "I\u2019ve authorized"
                           : providerId === "openai"
-                            ? "인증 완료"
+                            ? "Complete authentication"
                             : "Complete login"}
                     </button>
                     <button
@@ -938,7 +939,8 @@ export function PmSettingsPanel() {
                 <h4 style={{ margin: "0 0 8px", fontSize: 15 }}>Gateway restart</h4>
                 <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted)" }}>
                   This stops the server process. The workspace is saved before shutdown. If nothing auto-restarts (e.g.{" "}
-                  <code style={{ fontSize: 12 }}>npm run dev:gateway</code>), start the gateway again from the terminal.
+                  <code style={{ fontSize: 12 }}>beebridge gateway start</code> or{" "}
+                  <code style={{ fontSize: 12 }}>npm run start:gateway</code>), start the gateway again from the terminal.
                 </p>
                 <button type="button" className="btn-secondary" onClick={onRestartGateway} disabled={restartLoading}>
                   {restartLoading ? "Requesting…" : "Restart gateway"}

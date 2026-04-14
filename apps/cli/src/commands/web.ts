@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { assertWebNextBuildExists } from "../build-preflight.js";
 import { spawnNpmDaemon } from "../daemon-spawn.js";
 import { stopProcessOnPort } from "../port-utils.js";
 import { resolveBeebridgeRepoRoot } from "../repo-root.js";
-import { envForNextWebDev } from "../web-dev-env.js";
+import { envForNextWebDev, envForNextWebProd } from "../web-dev-env.js";
 
 /** Must match `SettingsTab` in web `pm-settings-panel.tsx` (URL `?tab=`). */
 type SettingsTab = "connection" | "auth" | "model" | "workspace" | "status";
@@ -22,7 +23,12 @@ function openInBrowser(url: string): void {
   spawn("xdg-open", [url], { stdio: "ignore", detached: true });
 }
 
-export async function startWebUi(options: { open?: boolean; port?: string; daemon?: boolean }): Promise<void> {
+export async function startWebUi(options: {
+  open?: boolean;
+  port?: string;
+  daemon?: boolean;
+  dev?: boolean;
+}): Promise<void> {
   await startWebUiWithPath({ ...options, openPath: "/dashboard" });
 }
 
@@ -31,12 +37,20 @@ async function startWebUiWithPath(options: {
   port?: string;
   openPath: string;
   daemon?: boolean;
+  dev?: boolean;
 }): Promise<void> {
   const port = Number(options.port ?? process.env.PORT ?? "3000");
+  const dev = options.dev === true;
+
+  if (!dev) {
+    assertWebNextBuildExists(resolveBeebridgeRepoRoot());
+  }
+
+  const npmScript = dev ? "dev:web" : "start:web";
 
   if (options.daemon) {
     const { pid, logPath, pidPath } = spawnNpmDaemon({
-      npmScript: "dev:web",
+      npmScript,
       port,
       label: "web",
     });
@@ -50,14 +64,14 @@ async function startWebUiWithPath(options: {
   }
 
   const repoRoot = resolveBeebridgeRepoRoot();
-  const env = envForNextWebDev(port);
+  const env = dev ? envForNextWebDev(port) : envForNextWebProd(port);
 
   if (options.open) {
     setTimeout(() => openInBrowser(`http://localhost:${port}${options.openPath}`), 1200);
   }
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("npm", ["run", "dev:web"], {
+    const child = spawn("npm", ["run", npmScript], {
       cwd: repoRoot,
       env,
       stdio: "inherit",
@@ -75,7 +89,12 @@ async function startWebUiWithPath(options: {
   });
 }
 
-export async function restartWebUi(options: { open?: boolean; port?: string; daemon?: boolean }): Promise<void> {
+export async function restartWebUi(options: {
+  open?: boolean;
+  port?: string;
+  daemon?: boolean;
+  dev?: boolean;
+}): Promise<void> {
   const port = Number(options.port ?? process.env.PORT ?? "3000");
   stopProcessOnPort(port);
   await startWebUi(options);
@@ -85,11 +104,13 @@ export async function openSettingsUi(options: {
   port?: string;
   open?: boolean;
   tab?: SettingsTab;
+  dev?: boolean;
 }): Promise<void> {
   const tab = options.tab ?? "connection";
   await startWebUiWithPath({
     port: options.port,
     open: options.open ?? true,
     openPath: `/settings?tab=${encodeURIComponent(tab)}`,
+    dev: options.dev,
   });
 }

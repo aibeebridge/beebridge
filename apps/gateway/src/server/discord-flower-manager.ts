@@ -98,8 +98,8 @@ export class DiscordFlowerManager {
       if (!ch?.isTextBased() || !ch.isSendable()) return;
 
       const icon = status === "done" ? "✅" : "❌";
-      const statusText = status === "done" ? "완료" : "실패";
-      let msg = `${icon} 작업 ${statusText}: \`${taskId}\``;
+      const statusText = status === "done" ? "Done" : "Failed";
+      let msg = `${icon} Task ${statusText}: \`${taskId}\``;
       if (summary) {
         msg += `\n${summary}`;
       }
@@ -451,7 +451,7 @@ export class DiscordFlowerManager {
       if (
         chatActionToolsEnabled &&
         (!chatResult.actions || chatResult.actions.length === 0) &&
-        /오류|에러|error|실패|문제.*발생|시스템.*문제/i.test(reply)
+        /error|fail(ed|ure)?|problem\s*(occurred|detected)|system\s*(issue|error)/i.test(reply)
       ) {
         reply = `${reply}\n\n_(Beebridge: no workspace tools were called. The above is generated text, not a system report.)_`;
       }

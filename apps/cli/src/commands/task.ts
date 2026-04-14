@@ -1,5 +1,11 @@
+import { readPersistedGatewayTokenIfPresent } from "@beebridge/shared/gateway-token-file";
+
 const baseUrl = process.env.beebridge_GATEWAY_URL ?? "http://localhost:4321";
-const token = process.env.beebridge_GATEWAY_TOKEN ?? "dev-token";
+const token =
+  process.env.beebridge_GATEWAY_TOKEN ??
+  process.env.GATEWAY_TOKEN ??
+  readPersistedGatewayTokenIfPresent() ??
+  "";
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return {

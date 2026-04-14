@@ -20,6 +20,7 @@ import {
   managerSettingsShow,
 } from "./commands/manager-settings.js";
 import { restartGatewayUi, startGatewayUi } from "./commands/gateway.js";
+import { stopBeebridgeServers } from "./commands/stop.js";
 import { openSettingsUi, restartWebUi, startWebUi } from "./commands/web.js";
 
 const program = new Command();
@@ -72,8 +73,9 @@ manager
   )
   .option("--port <port>", "web server port (default: 3000)")
   .option("--no-open", "do not open browser automatically")
-  .action(async ({ tab, port, open }) => {
-    await openSettingsUi({ tab, port, open });
+  .option("--dev", "run Next.js dev server (tsx / next dev) instead of production build")
+  .action(async ({ tab, port, open, dev }) => {
+    await openSettingsUi({ tab, port, open, dev });
   });
 
 const managerAuth = manager.command("auth").description("PM auth profile settings");
@@ -140,31 +142,54 @@ flower.command("status").action(async () => {
   await flowerStatus();
 });
 
+program
+  .command("stop")
+  .description("Stop gateway and web UI servers (SIGTERM processes listening on their ports)")
+  .option("--gateway-port <port>", "gateway port (default: 4321)")
+  .option("--web-port <port>", "web UI port (default: 3000)")
+  .action((opts) => {
+    try {
+      stopBeebridgeServers({ gatewayPort: opts.gatewayPort, webPort: opts.webPort });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`${message}\n`);
+      process.exit(1);
+    }
+  });
+
 const gateway = program.command("gateway").description("Gateway API / WebSocket server");
 gateway
   .command("start")
   .option("--port <port>", "gateway port (default: 4321, or PORT env)")
   .option("-d, --daemon", "run in background; logs under .beebridge-daemon/")
-  .action(async ({ port, daemon }) => {
-    await startGatewayUi({ port, daemon });
+  .option("--dev", "run gateway from TypeScript via tsx (development)")
+  .action(async ({ port, daemon, dev }) => {
+    await startGatewayUi({ port, daemon, dev });
   });
 
 gateway
   .command("restart")
   .option("--port <port>", "gateway port (default: 4321, or PORT env)")
   .option("-d, --daemon", "run in background; logs under .beebridge-daemon/")
-  .action(async ({ port, daemon }) => {
-    await restartGatewayUi({ port, daemon });
+  .option("--dev", "run gateway from TypeScript via tsx (development)")
+  .action(async ({ port, daemon, dev }) => {
+    await restartGatewayUi({ port, daemon, dev });
   });
 
-const web = program.command("web").description("Web UI (Next.js) dev server");
+gateway.command("token").description("Show current gateway auth token").action(async () => {
+  const { showGatewayToken } = await import("./commands/gateway-token.js");
+  await showGatewayToken();
+});
+
+const web = program.command("web").description("Web UI (Next.js dashboard)");
 web
   .command("start")
   .option("-o, --open", "open browser automatically")
   .option("--port <port>", "web server port (default: 3000)")
   .option("-d, --daemon", "run in background; logs under .beebridge-daemon/")
-  .action(async ({ open, port, daemon }) => {
-    await startWebUi({ open, port, daemon });
+  .option("--dev", "run next dev instead of production (next start)")
+  .action(async ({ open, port, daemon, dev }) => {
+    await startWebUi({ open, port, daemon, dev });
   });
 
 web
@@ -172,8 +197,9 @@ web
   .option("-o, --open", "open browser automatically")
   .option("--port <port>", "web server port (default: 3000)")
   .option("-d, --daemon", "run in background; logs under .beebridge-daemon/")
-  .action(async ({ open, port, daemon }) => {
-    await restartWebUi({ open, port, daemon });
+  .option("--dev", "run next dev instead of production (next start)")
+  .action(async ({ open, port, daemon, dev }) => {
+    await restartWebUi({ open, port, daemon, dev });
   });
 
 web
@@ -185,8 +211,9 @@ web
   )
   .option("--port <port>", "web server port (default: 3000)")
   .option("--no-open", "do not open browser automatically")
-  .action(async ({ tab, port, open }) => {
-    await openSettingsUi({ tab, port, open });
+  .option("--dev", "run Next.js dev server instead of production build")
+  .action(async ({ tab, port, open, dev }) => {
+    await openSettingsUi({ tab, port, open, dev });
   });
 
 program.command("tui").description("Launch keyboard-driven terminal GUI").action(async () => {

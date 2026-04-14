@@ -68,17 +68,27 @@ npm run build:cli
 
 ## Running
 
+**Production (default for CLI):** `beebridge gateway start` and `beebridge web start` run the compiled gateway (`node dist/...`) and `next start`. Build first from the repo root:
+
+```bash
+npm run build
+```
+
+Then start services (or use `npm run start:gateway` / `npm run start:web`). For TypeScript / `next dev` without a production build, use `--dev` (e.g. `node beebridge.mjs gateway start --dev`).
+
 ### Gateway (API + WebSocket + CDP relay)
 
 ```bash
-GATEWAY_TOKEN=dev-token npm run dev:gateway
+npm run start:gateway
+# or: npm run dev:gateway   # development (tsx)
 # Default HTTP API: http://localhost:4321  (not the Next.js UI)
 ```
 
 ### Web UI
 
 ```bash
-npm run dev:web
+npm run start:web
+# or: npm run dev:web   # development (next dev)
 # Default: http://localhost:3000
 ```
 
@@ -87,6 +97,8 @@ npm run dev:web
 ```bash
 node beebridge.mjs gateway start
 node beebridge.mjs web start
+node beebridge.mjs stop   # SIGTERM listeners on ports 4321 (gateway) and 3000 (web); optional --gateway-port / --web-port
+# Add --dev for npm run dev:gateway / dev:web instead of production.
 # Daemon variants: see root package.json (`gateway:start:daemon`, `web:start:daemon`, etc.)
 ```
 
@@ -100,7 +112,7 @@ node beebridge.mjs web start
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GATEWAY_TOKEN` | `dev-token` | Auth token for gateway API, main WebSocket, and CDP relay |
+| `GATEWAY_TOKEN` | _(auto)_ | If unset, a token is generated (OpenClaw-style 48-char hex) and saved under `~/.beebridge/gateway-token`. Set this to override. |
 | `PORT` | `4321` | Gateway HTTP port |
 | `BEEBRIDGE_CDP_RELAY_PORT` | `PORT + 2` | Loopback CDP relay (e.g. `4323` when `PORT=4321`) |
 | `BEEBRIDGE_WEB_PORT` | `3000` | Shown in gateway "API-only" help page for linking to the Next.js app |
@@ -109,6 +121,8 @@ node beebridge.mjs web start
 | `AIBRIDGE_GITHUB_CLIENT_ID` | -- | Legacy alias for older configs |
 | `OPENAI_CODEX_CLIENT_ID` / `OPENAI_CODEX_REDIRECT_URI` | see code | Optional OpenAI Codex OAuth overrides |
 | `NODE_TLS_REJECT_UNAUTHORIZED` | `1` | Set to `0` to skip TLS verification (**dev only**) |
+
+The Next.js app reads the same file on the server when `NEXT_PUBLIC_GATEWAY_TOKEN` is not set, so the dashboard usually works without manual copy-paste after the first gateway start.
 
 More options (`.env` examples, CORS, auth mode): [`INSTALL.md`](INSTALL.md).
 

@@ -3,7 +3,7 @@
 
 const DEFAULT_GW_URL = "ws://localhost:4321/ws";
 const DEFAULT_RELAY_URL = "ws://127.0.0.1:4323";
-const DEFAULT_GW_TOKEN = "dev-token";
+const DEFAULT_GW_TOKEN = "";
 const RECONNECT_MS = 3000;
 
 let gwWs = null;
@@ -13,6 +13,8 @@ let flowerId = "flower-" + Date.now();
 let attachedTabId = null;
 let relayReconnectTimer = null;
 let gwReconnectTimer = null;
+/** Log once if user has not saved a token (avoids WS reconnect spam + invalid_credentials noise). */
+let warnedMissingToken = false;
 
 function getSettings() {
   return new Promise((resolve) => {
@@ -126,9 +128,20 @@ function connectRelay() {
     relayReconnectTimer = null;
   }
   getSettings().then(({ relayWsUrl, gwToken }) => {
+    const tok = String(gwToken || "").trim();
+    if (!tok) {
+      if (!warnedMissingToken) {
+        warnedMissingToken = true;
+        console.warn(
+          "[beebridge Flower] Gateway token is empty. Open the extension popup and paste the token from ~/.beebridge/gateway-token (must match the running gateway).",
+        );
+      }
+      return;
+    }
+    warnedMissingToken = false;
     const url = relayWsUrl.includes("?")
-      ? `${relayWsUrl}&token=${encodeURIComponent(gwToken)}`
-      : `${relayWsUrl}?token=${encodeURIComponent(gwToken)}`;
+      ? `${relayWsUrl}&token=${encodeURIComponent(tok)}`
+      : `${relayWsUrl}?token=${encodeURIComponent(tok)}`;
     try {
       relayWs = new WebSocket(url);
     } catch {
@@ -185,7 +198,11 @@ function connectGateway() {
     gwReconnectTimer = null;
   }
   getSettings().then(({ gwUrl, gwToken }) => {
-    const url = gwUrl + (gwUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(gwToken);
+    const tok = String(gwToken || "").trim();
+    if (!tok) {
+      return;
+    }
+    const url = gwUrl + (gwUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(tok);
     try {
       gwWs = new WebSocket(url);
     } catch {

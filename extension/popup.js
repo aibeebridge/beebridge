@@ -25,7 +25,7 @@ function updateStatus(status) {
     gatewayWarnEl.style.display = "block";
     gatewayWarnEl.innerHTML =
       "<strong>Gateway not reachable.</strong> Start the beebridge gateway on this PC first " +
-      "(e.g. <code style=font-size:10px>npm run dev:gateway</code> in the repo, default port <strong>4321</strong>). " +
+      "(e.g. <code style=font-size:10px>beebridge gateway start</code> or <code style=font-size:10px>npm run start:gateway</code>, default port <strong>4321</strong>). " +
       "Relay uses <strong>PORT+2</strong> (often <strong>4323</strong>). Token must match <code>GATEWAY_TOKEN</code>. " +
       "Then click <strong>Save & Reconnect</strong>.";
   } else {
@@ -44,7 +44,7 @@ function updateStatus(status) {
 chrome.storage.local.get(["gwUrl", "gwToken", "relayWsUrl"], (result) => {
   gwUrlInput.value = result?.gwUrl || "ws://localhost:4321/ws";
   relayWsUrlInput.value = result?.relayWsUrl || "ws://127.0.0.1:4323";
-  gwTokenInput.value = result?.gwToken || "dev-token";
+  gwTokenInput.value = result?.gwToken ?? "";
 });
 
 chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {

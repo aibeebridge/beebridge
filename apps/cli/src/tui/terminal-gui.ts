@@ -1,5 +1,8 @@
 import readline from "node:readline";
 import { spawn } from "node:child_process";
+import { readPersistedGatewayTokenIfPresent } from "@beebridge/shared/gateway-token-file";
+import { assertGatewayDistExists, assertWebNextBuildExists } from "../build-preflight.js";
+import { envForNextWebProd } from "../web-dev-env.js";
 import {
   managerAuthAdd,
   managerAuthLogin,
@@ -112,7 +115,11 @@ class BeebridgeTerminalGui {
   };
 
   private gatewayUrl = process.env.beebridge_GATEWAY_URL ?? "http://localhost:4321";
-  private gatewayToken = process.env.beebridge_GATEWAY_TOKEN ?? "dev-token";
+  private gatewayToken =
+    process.env.beebridge_GATEWAY_TOKEN ??
+    process.env.GATEWAY_TOKEN ??
+    readPersistedGatewayTokenIfPresent() ??
+    "";
   private logs: string[] = ["beebridge Terminal GUI started"];
   private closing = false;
   private busy = false;
@@ -689,11 +696,18 @@ class BeebridgeTerminalGui {
   private launchWebUi(): void {
     const projectHome = process.env.beebridge_HOME ?? process.cwd();
     const port = process.env.PORT ?? "3000";
-    const child = spawn("npm", ["run", "dev:web"], {
+    try {
+      assertWebNextBuildExists(projectHome);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.log(msg);
+      return;
+    }
+    const child = spawn("npm", ["run", "start:web"], {
       cwd: projectHome,
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, PORT: port },
+      env: envForNextWebProd(Number(port)),
       shell: process.platform === "win32",
     });
     child.unref();
@@ -704,7 +718,14 @@ class BeebridgeTerminalGui {
 
   private startGatewayProcess(): void {
     const projectHome = process.env.beebridge_HOME ?? process.cwd();
-    const child = spawn("npm", ["run", "dev:gateway"], {
+    try {
+      assertGatewayDistExists(projectHome);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.log(msg);
+      return;
+    }
+    const child = spawn("npm", ["run", "start:gateway"], {
       cwd: projectHome,
       detached: true,
       stdio: "ignore",

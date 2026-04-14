@@ -280,7 +280,7 @@ export const CHAT_ACTION_TOOLS: ChatCompletionTool[] = [
       name: "approve_pending_tasks",
       description:
         "Move tasks from the pending approval queue to approved so they can run. " +
-        "Use when the user confirms they want to approve (e.g. yes, OK, approve, ㅇㅇ, 승인) for jobs listed under Jobs & approvals in context. " +
+        "Use when the user confirms they want to approve (e.g. yes, OK, approve) for jobs listed under Jobs & approvals in context. " +
         "Prefer taskIds from that list; use titleSubstring if the user describes the task by name. " +
         "By default starts the execution queue for approved tasks immediately.",
       parameters: {
@@ -314,7 +314,7 @@ export const CHAT_ACTION_TOOLS: ChatCompletionTool[] = [
       name: "run_tasks",
       description:
         "Start execution for specific tasks that are in waiting state but haven't run yet. " +
-        "Use when a specific task exists and the user asks to run, start, execute, or proceed (e.g. '진행해', '실행해', 'run it', 'start'). " +
+        "Use when a specific task exists and the user asks to run, start, execute, or proceed (e.g. 'run it', 'start', 'go ahead'). " +
         "Prefer taskIds for precision. Avoid districtId unless the user explicitly wants ALL tasks in a district to run. " +
         "Do NOT use this to re-run completed tasks or an entire district for follow-up work — use setup_plan to add new tasks instead.",
       parameters: {
@@ -368,11 +368,11 @@ Auto-configuration guidelines:
 - When tasks span multiple districts with data dependencies, create bridges between them.
 - To clear the bridge pipeline start, call set_bridge_pipeline_start with clear=true.
 - When a task already exists and the user asks to run/start/proceed, call run_tasks with specific task id(s). Do NOT respond saying "the task is already active" or "it will proceed automatically" without calling run_tasks — merely describing the state does not trigger execution.
-- IMPORTANT: Do NOT re-run an entire district's tasks when the user asks for follow-up work (review, fix, improve, check, 검토, 수정, 확인). Instead, use setup_plan with targetDistrictId to add a NEW bee with the specific follow-up task, then run_tasks with only the NEW task id. Existing completed tasks must not be re-executed unless the user explicitly says "re-run all" or "다시 전부 실행".
+- IMPORTANT: Do NOT re-run an entire district's tasks when the user asks for follow-up work (review, fix, improve, check). Instead, use setup_plan with targetDistrictId to add a NEW bee with the specific follow-up task, then run_tasks with only the NEW task id. Existing completed tasks must not be re-executed unless the user explicitly says "re-run all".
 - For review/check requests: add a "reviewer" role bee whose mission describes what to review. For fix/improve requests: add a "coder" or appropriate role bee whose mission describes the fix. Always target the existing district via targetDistrictId.
 - Never fabricate vague failures such as "system error", "auto-approval did not run", or "task could not be auto-configured" unless the tool return value or explicit runtime context states that exact problem. If you did not invoke a tool, say you did not run workspace actions instead of blaming the system.
 - If a tool returns text starting with "Error:" or containing a concrete failure, your reply must reflect that exact information (quote or faithful summary). Do not substitute generic apologies such as "a problem occurred while creating the task" or "try again later" in any language unless the tool output truly says so.
-- When the user affirms approval for pending jobs (yes, OK, sure, ㅇㅇ, 승인, etc.), call approve_pending_tasks with taskIds from the Jobs & approvals context or titleSubstring matching the task title. Do not tell the user they must open the web UI to approve if this tool is available.
+- When the user affirms approval for pending jobs (yes, OK, sure, approve, etc.), call approve_pending_tasks with taskIds from the Jobs & approvals context or titleSubstring matching the task title. Do not tell the user they must open the web UI to approve if this tool is available.
 
 After executing actions, respond to the user summarizing what was set up, in the user's language.`;
 

@@ -20,7 +20,7 @@ function updateStatus(connected: boolean, flowerId?: string, currentJobId?: stri
 
 chrome.storage?.local?.get(["gwUrl", "gwToken"], (result) => {
   gwUrlInput.value = (result?.gwUrl as string) || "ws://localhost:4321/ws";
-  gwTokenInput.value = (result?.gwToken as string) || "dev-token";
+  gwTokenInput.value = (result?.gwToken as string) ?? "";
 });
 
 chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {

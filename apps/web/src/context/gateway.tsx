@@ -13,6 +13,15 @@ export const DEFAULT_GATEWAY_FETCH_TIMEOUT_MS: number = (() => {
 /** Shorter timeout for /health probes so the UI does not pile up hung requests. */
 export const GATEWAY_HEALTH_TIMEOUT_MS = 8000;
 
+/**
+ * Bearer token for gateway HTTP/WebSocket (must match gateway `GATEWAY_TOKEN`).
+ * Set at build time via `NEXT_PUBLIC_GATEWAY_TOKEN`; empty means the user must enter the token in Settings.
+ */
+export const DEFAULT_PUBLIC_GATEWAY_TOKEN =
+  typeof process !== "undefined" && typeof process.env.NEXT_PUBLIC_GATEWAY_TOKEN === "string"
+    ? process.env.NEXT_PUBLIC_GATEWAY_TOKEN
+    : "";
+
 export function mergeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   if (a.aborted) return a;
   if (b.aborted) return b;
@@ -111,7 +120,7 @@ export function parseGatewayJsonBody(text: string, pathForError: string): unknow
   throw new Error(`Gateway returned invalid JSON (${pathForError}): ${trimmed.slice(0, 160)}`);
 }
 
-/** Used when `url` is empty: browser hits same-origin `/api` and `/ws` (Next rewrites → gateway). */
+/** Used when `url` is empty: browser hits same-origin `/api` via Next rewrites; WebSocket uses `gatewayWsUrl` → real gateway origin (rewrites often drop `?token=` on WS). */
 export const FALLBACK_GATEWAY_ORIGIN =
   typeof process !== "undefined" && process.env.NEXT_PUBLIC_GATEWAY_ORIGIN
     ? process.env.NEXT_PUBLIC_GATEWAY_ORIGIN.replace(/\/$/, "")
@@ -145,13 +154,19 @@ export function gatewayWsUrl(urlState: string, token: string): string {
     return `${ws}/ws?token=${encodeURIComponent(token)}`;
   }
   if (typeof window !== "undefined") {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const host = window.location.host;
     if (process.env.NEXT_PUBLIC_GATEWAY_WS_PORT) {
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
       const p = process.env.NEXT_PUBLIC_GATEWAY_WS_PORT;
       return `${proto}://${window.location.hostname}:${p}/ws?token=${encodeURIComponent(token)}`;
     }
-    return `${proto}://${host}/ws?token=${encodeURIComponent(token)}`;
+    /**
+     * Do not use same-origin `window.location.host` + `/ws` here: Next.js rewrites often fail to
+     * forward `?token=` on WebSocket upgrades, so the gateway sees no credentials. HTTP `/api`
+     * rewrites are fine; WS must hit the real gateway (NEXT_PUBLIC_GATEWAY_ORIGIN or default :4321).
+     */
+    const base = FALLBACK_GATEWAY_ORIGIN.replace(/\/$/, "");
+    const ws = base.replace(/^https/, "wss").replace(/^http/, "ws");
+    return `${ws}/ws?token=${encodeURIComponent(token)}`;
   }
   const base = FALLBACK_GATEWAY_ORIGIN.replace(/\/$/, "");
   const ws = base.replace(/^https/, "wss").replace(/^http/, "ws");
@@ -170,25 +185,64 @@ interface GatewayContextValue {
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
-export function GatewayProvider({ children }: { children: ReactNode }) {
+export function GatewayProvider({
+  children,
+  initialToken,
+}: {
+  children: ReactNode;
+  /** From server: persisted file or omitted when using NEXT_PUBLIC_GATEWAY_TOKEN only. */
+  initialToken?: string;
+}) {
   /** Empty = same-origin `/api`, `/health`, `/ws` via Next rewrites → gateway (see next.config.ts). */
   const [url, setUrl] = useState("");
-  const [token, setToken] = useState("dev-token");
+  const [token, setToken] = useState(() => DEFAULT_PUBLIC_GATEWAY_TOKEN || initialToken || "");
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetchWithGatewayTimeout(
-      gatewayHealthUrl(url),
-      { headers: { Authorization: `Bearer ${token}` } },
-      GATEWAY_HEALTH_TIMEOUT_MS,
-    )
-      .then((r) => {
-        if (!cancelled) setConnected(r.ok);
+    fetch("/api/gateway-token")
+      .then((r) => r.json())
+      .then((data: { token?: string }) => {
+        if (!cancelled && data?.token && data.token !== token) {
+          setToken(data.token);
+        }
       })
-      .catch(() => {
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function probe() {
+      try {
+        const r = await fetchWithGatewayTimeout(
+          gatewayHealthUrl(url),
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+          GATEWAY_HEALTH_TIMEOUT_MS,
+        );
+        if (cancelled) return;
+        if (!r.ok) { setConnected(false); return; }
+        let body: { tokenValid?: boolean } = {};
+        try { body = await r.json(); } catch { /* ignore */ }
+        if (body.tokenValid === false) {
+          try {
+            const fresh = await fetch("/api/gateway-token").then((t) => t.json());
+            if (!cancelled && fresh?.token && fresh.token !== token) {
+              setToken(fresh.token);
+              return;
+            }
+          } catch { /* ignore */ }
+          setConnected(false);
+          return;
+        }
+        setConnected(true);
+      } catch {
         if (!cancelled) setConnected(false);
-      });
+      }
+    }
+
+    probe();
     return () => { cancelled = true; };
   }, [url, token]);
 

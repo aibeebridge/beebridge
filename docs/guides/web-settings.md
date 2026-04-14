@@ -24,7 +24,7 @@ The **Settings** screen configures the **gateway connection**, **PM auth profile
 
 Most pages use [`GatewayProvider`](../../apps/web/src/context/gateway.tsx) with an **empty** gateway URL. That means HTTP calls use **same-origin** paths like `/api/...`, which Next.js can **rewrite** to the gateway (see `next.config`).
 
-The **Settings** panel’s **Connection** tab uses **its own** `gatewayUrl` and `gatewayToken` state (defaults `http://localhost:4321` and `dev-token`). Use this when:
+The **Settings** panel’s **Connection** tab uses **its own** `gatewayUrl` and `gatewayToken` state (defaults `http://localhost:4321` and the same token as the app shell: `NEXT_PUBLIC_GATEWAY_TOKEN`, or the server-read `~/.beebridge/gateway-token` when the gateway has created it). Use this when:
 
 - The gateway runs on another host/port than the Next dev server, or
 - You need to paste an explicit token.
@@ -73,7 +73,7 @@ Data root for districts, jobs, and related files. Copy explains that `.beebridge
 ### Diagnostics (`status`)
 
 - Read-only summary: active profile id, default provider/model, allowed model count (from loaded settings).
-- **Restart gateway** — `POST /api/admin/restart` (shuts down the gateway process; you may need to run `npm run dev:gateway` or equivalent again locally).
+- **Restart gateway** — `POST /api/admin/restart` (shuts down the gateway process; you may need to run `beebridge gateway start`, `npm run start:gateway`, or equivalent again locally).
 
 ## Optional environment variables (Next / browser)
 

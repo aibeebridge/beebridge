@@ -1,12 +1,18 @@
 import { execFileSync, spawn } from "node:child_process";
 import readline from "node:readline";
+import { readPersistedGatewayTokenIfPresent } from "@beebridge/shared/gateway-token-file";
 
 function gatewayBaseUrl(): string {
   return process.env.beebridge_GATEWAY_URL ?? "http://localhost:4321";
 }
 
 function gatewayToken(): string {
-  return process.env.beebridge_GATEWAY_TOKEN ?? "dev-token";
+  return (
+    process.env.beebridge_GATEWAY_TOKEN ??
+    process.env.GATEWAY_TOKEN ??
+    readPersistedGatewayTokenIfPresent() ??
+    ""
+  );
 }
 const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";

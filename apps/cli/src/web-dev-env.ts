@@ -36,3 +36,13 @@ export function envForNextWebDev(port: number): NodeJS.ProcessEnv {
   base.NODE_OPTIONS = existing.trim() ? `${existing.trim()} ${extra}` : extra;
   return base;
 }
+
+/** Environment for `npm run start:web` / `next start`. */
+export function envForNextWebProd(port: number): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PORT: String(port),
+    NODE_ENV: "production",
+    NEXT_TELEMETRY_DISABLED: "1",
+  };
+}

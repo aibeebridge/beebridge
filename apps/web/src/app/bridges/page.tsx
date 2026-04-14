@@ -4,6 +4,14 @@ import { useEffect, useState, useCallback, useMemo, useRef, type ChangeEvent } f
 import { useGateway, parseGatewayJsonBody, gatewayWsUrl } from "../../context/gateway";
 import BeeGraphEditor, { type BeeGraphTask } from "../../components/bee-graph/bee-graph-editor";
 
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 interface District {
   id: string;
   title: string;
@@ -836,11 +844,11 @@ export default function BridgesPage() {
               edgeDeleteMode="button"
               selectionOnDrag
               onSelectionChange={({ nodeIds, edgeIds }) => {
-                setSelectedNodeIds(nodeIds);
-                setSelectedEdgeIds(edgeIds);
+                setSelectedNodeIds((prev) => arraysEqual(prev, nodeIds) ? prev : nodeIds);
+                setSelectedEdgeIds((prev) => arraysEqual(prev, edgeIds) ? prev : edgeIds);
                 if (nodeIds.length > 0 || edgeIds.length > 0) {
-                  setLastSelectedNodeIds(nodeIds);
-                  setLastSelectedEdgeIds(edgeIds);
+                  setLastSelectedNodeIds((prev) => arraysEqual(prev, nodeIds) ? prev : nodeIds);
+                  setLastSelectedEdgeIds((prev) => arraysEqual(prev, edgeIds) ? prev : edgeIds);
                 }
               }}
               onNodeClick={(districtId) => {

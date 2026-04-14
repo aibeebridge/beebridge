@@ -18,16 +18,17 @@ cd BEEBRIDGE
 # 2. Install all dependencies
 npm install
 
-# 3. Build packages (required before first run)
-npm run build --workspace=packages/shared
-npm run build --workspace=packages/core
-npm run build --workspace=apps/gateway
+# 3. Build (required before production gateway/web or CLI start)
+npm run build
+# Or minimal: build shared, core, gateway, web, and CLI as needed.
 
-# 4. Start gateway server
-GATEWAY_TOKEN=dev-token npm run dev:gateway
+# 4. Start gateway server (production)
+npm run start:gateway
+# Development: npm run dev:gateway
 
 # 5. Start web UI (in a new terminal)
-npm run dev:web
+npm run start:web
+# Development: npm run dev:web
 ```
 
 ## Chrome Extension Setup
@@ -43,7 +44,8 @@ npm run dev:web
 Create a `.env` file in the project root (optional):
 
 ```env
-GATEWAY_TOKEN=dev-token
+# Optional — if omitted, token is generated and stored in ~/.beebridge/gateway-token
+# GATEWAY_TOKEN=your-secret
 GITHUB_CLIENT_ID=your-github-oauth-app-client-id
 # Optional aliases (same value):
 # BEEBRIDGE_GITHUB_CLIENT_ID=your-github-oauth-app-client-id
@@ -55,7 +57,8 @@ NODE_TLS_REJECT_UNAUTHORIZED=0
 Or pass them inline when starting the gateway:
 
 ```bash
-GATEWAY_TOKEN=your-token GITHUB_CLIENT_ID=your-id npm run dev:gateway
+GITHUB_CLIENT_ID=your-id npm run start:gateway
+# Optional: GATEWAY_TOKEN=... to override ~/.beebridge/gateway-token
 ```
 
 ## Dependency Overview
@@ -88,7 +91,7 @@ lsof -ti :4321 | xargs kill -9
 
 ### `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`
 ```bash
-NODE_TLS_REJECT_UNAUTHORIZED=0 npm run dev:gateway
+NODE_TLS_REJECT_UNAUTHORIZED=0 npm run start:gateway
 ```
 
 ### Extension not connecting

@@ -12,13 +12,13 @@ import {
 export function DevBadge() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { url, connected } = useGateway();
+  const { url, token, connected } = useGateway();
   const [info, setInfo] = useState<{ uptime?: string; version?: string } | null>(null);
 
   useEffect(() => {
     if (!open || !connected) return;
     fetchWithGatewayTimeout(gatewayHealthUrl(url), {
-      headers: { Authorization: "Bearer dev-token" },
+      headers: { Authorization: `Bearer ${token}` },
     }, GATEWAY_HEALTH_TIMEOUT_MS)
       .then((r) => r.text())
       .then((t) => {
@@ -29,7 +29,7 @@ export function DevBadge() {
         }
       })
       .catch(() => setInfo(null));
-  }, [open, connected, url]);
+  }, [open, connected, url, token]);
 
   useEffect(() => {
     if (!open) return;

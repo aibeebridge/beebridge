@@ -347,7 +347,7 @@ export async function runChatMessage(params: {
       if (chatActionToolsEnabled && executedActions.length === 0) {
         const lower = finalContent.toLowerCase();
         const suspectNoTool =
-          /오류|에러|error|실패|문제.*발생|시스템.*문제/.test(lower);
+          /error|fail(ed|ure)?|problem\s*(occurred|detected)|system\s*(issue|error)/.test(lower);
         if (suspectNoTool) {
           params.deps.log(
             "CHAT",

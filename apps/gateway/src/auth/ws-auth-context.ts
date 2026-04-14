@@ -15,11 +15,19 @@ export function resolveWsAuthContext(req: IncomingMessage, config: GatewayAuthCo
   const headerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
   const queryToken = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? undefined;
   const supplied = headerToken ?? queryToken;
+  const trimmed = supplied?.trim() ?? "";
 
-  const authenticated = authorizeSecret(config, supplied);
+  const via = headerToken ? "header" : queryToken ? "query" : "none";
+  const preview = trimmed ? `${trimmed.slice(0, 8)}…` : "(empty)";
+
+  if (!trimmed) {
+    return { clientId, authenticated: false, reason: `missing_token (via=${via})` };
+  }
+
+  const authenticated = authorizeSecret(config, trimmed);
 
   if (!authenticated) {
-    return { clientId, authenticated: false, reason: "invalid_credentials" };
+    return { clientId, authenticated: false, reason: `invalid_credentials (via=${via}, token=${preview})` };
   }
 
   return { clientId, authenticated: true };

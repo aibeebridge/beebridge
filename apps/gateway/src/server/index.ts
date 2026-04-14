@@ -51,6 +51,7 @@ import { GraphStore } from "./graph-store.js";
 import { executeTaskViaCdp } from "../browser/controller.js";
 import { executeCodeTask } from "../codegen/code-executor.js";
 import { ProjectManager } from "../codegen/project-manager.js";
+import { cleanupAllProcessManagers } from "../codegen/process-manager.js";
 import { CdpRelayServer } from "../browser/cdp-relay.js";
 import { InteractionChainStore } from "./interaction-chain-store.js";
 import { WorkspaceConfig } from "./workspace-config.js";
@@ -65,6 +66,11 @@ import {
   generatePkce,
   serializeCodexBundle,
 } from "./openai-codex-oauth.js";
+import {
+  BEEGATEWAY_TOKEN_FILE,
+  loadOrCreatePersistedGatewayToken,
+  persistGatewayTokenFileIfChanged,
+} from "@beebridge/shared/gateway-token-file";
 
 const app = express();
 app.use(express.json());
@@ -93,6 +99,25 @@ function log(tag: string, detail: string): void {
   console.log(`[${ts}] [${tag}] ${detail}`);
 }
 
+/** Set `BEEBRIDGE_GATEWAY_PERF_LOG=1` for phase timings, slow HTTP, and WS message rate hints. */
+const GATEWAY_PERF_LOG =
+  process.env.BEEBRIDGE_GATEWAY_PERF_LOG === "1" || process.env.BEEBRIDGE_GATEWAY_PERF_LOG === "true";
+
+const gatewayPerfBootT0 = performance.now();
+
+function perfLog(phase: string, detail?: string): void {
+  if (!GATEWAY_PERF_LOG) return;
+  const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+  const sinceBoot = (performance.now() - gatewayPerfBootT0).toFixed(1);
+  const extra = detail ? ` ${detail}` : "";
+  console.log(`[${ts}] [PERF] ${phase}${extra} (boot +${sinceBoot}ms)`);
+}
+
+let perfWsMsgInWindow = 0;
+let perfWsWindowStart = Date.now();
+
+if (GATEWAY_PERF_LOG) perfLog("boot", "BEEBRIDGE_GATEWAY_PERF_LOG enabled");
+
 /** Task deletion debug — grep for `TASK_DELETE` in terminal */
 function logTaskDelete(detail: string, meta?: Record<string, unknown>): void {
   const suffix = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
@@ -109,8 +134,17 @@ async function postFormJson(url: string, form: URLSearchParams): Promise<unknown
   return res.json();
 }
 
-app.use((req, _res, next) => {
+app.use((req, res, next) => {
+  const reqStarted = performance.now();
   log("REQ", `${req.method} ${req.path}`);
+  if (GATEWAY_PERF_LOG) {
+    res.on("finish", () => {
+      const ms = performance.now() - reqStarted;
+      if (ms >= 400) {
+        perfLog("SLOW_HTTP", `${req.method} ${req.path} ${ms.toFixed(0)}ms status=${res.statusCode}`);
+      }
+    });
+  }
   next();
 });
 
@@ -130,17 +164,57 @@ app.use((req, res, next) => {
 const PORT = Number(process.env.PORT ?? 4321);
 /** Loopback CDP relay for chrome.debugger extension (default: gateway port + 2). */
 const CDP_RELAY_PORT = Number(process.env.BEEBRIDGE_CDP_RELAY_PORT ?? PORT + 2);
-const authConfig: GatewayAuthConfig = {
-  mode: (process.env.GATEWAY_AUTH_MODE as GatewayAuthConfig["mode"]) ?? "token",
-  token: process.env.GATEWAY_TOKEN ?? "dev-token",
-  password: process.env.GATEWAY_PASSWORD,
-};
 
-if ((authConfig.token === "dev-token" || !authConfig.token) && process.env.NODE_ENV === "production") {
-  console.warn("[SECURITY] GATEWAY_TOKEN is not set or using default 'dev-token' in production. Set GATEWAY_TOKEN environment variable.");
+const authMode = (process.env.GATEWAY_AUTH_MODE as GatewayAuthConfig["mode"]) ?? "token";
+let authToken = process.env.GATEWAY_TOKEN?.trim() || undefined;
+const authPassword = process.env.GATEWAY_PASSWORD?.trim() || undefined;
+
+if (authMode === "token" && !authToken) {
+  const { token, created } = loadOrCreatePersistedGatewayToken();
+  authToken = token;
+  if (created) {
+    log(
+      "AUTH",
+      `Gateway token was missing. Generated a new token and saved it to ${BEEGATEWAY_TOKEN_FILE} (same format as OpenClaw: random hex). Set GATEWAY_TOKEN to override.`,
+    );
+  }
+} else if (authMode === "none" && !authToken && !authPassword) {
+  const { token, created } = loadOrCreatePersistedGatewayToken();
+  authToken = token;
+  if (created) {
+    log(
+      "AUTH",
+      `GATEWAY_AUTH_MODE is none but CDP relay still needs a secret. Saved token to ${BEEGATEWAY_TOKEN_FILE}.`,
+    );
+  }
 }
 
-const cdpRelay = new CdpRelayServer(authConfig.token ?? "dev-token");
+const authConfig: GatewayAuthConfig = {
+  mode: authMode,
+  token: authToken,
+  password: authPassword,
+};
+
+if (authMode === "token" && typeof authToken === "string" && authToken.length > 0) {
+  if (persistGatewayTokenFileIfChanged(authToken)) {
+    log("AUTH", `Updated ${BEEGATEWAY_TOKEN_FILE} so web UI and CLI read the same token as this gateway.`);
+  }
+}
+
+if (authMode === "password" && !authConfig.password) {
+  console.error("[FATAL] GATEWAY_AUTH_MODE is password but GATEWAY_PASSWORD is not set.");
+  process.exit(1);
+}
+
+const cdpRelaySecret = authConfig.token ?? authConfig.password;
+if (!cdpRelaySecret) {
+  console.error(
+    "[FATAL] No secret for CDP relay (set GATEWAY_TOKEN, or GATEWAY_PASSWORD when mode=password).",
+  );
+  process.exit(1);
+}
+
+const cdpRelay = new CdpRelayServer(cdpRelaySecret);
 
 const limiter = new AuthRateLimit();
 const approvalGate = new ApprovalGate();
@@ -160,8 +234,13 @@ const taskSchedules = new Map<string, TaskSchedule>();
 const allTasks = new Map<string, BeeTask>();
 const allDistricts = new Map<string, BeeDistrict>();
 const districtBridges = new Map<string, DistrictBridge>();
+if (GATEWAY_PERF_LOG) perfLog("phase: GraphStore ctor start");
+const _tGraphStore = performance.now();
 const graphStore = new GraphStore(workspaceRoot);
+if (GATEWAY_PERF_LOG) perfLog("phase: GraphStore ctor", `done in ${(performance.now() - _tGraphStore).toFixed(1)}ms`);
+const _tChainStore = performance.now();
 const chainStore = new InteractionChainStore(workspaceRoot);
+if (GATEWAY_PERF_LOG) perfLog("phase: InteractionChainStore ctor", `done in ${(performance.now() - _tChainStore).toFixed(1)}ms`);
 
 const flowerConfigStore = new FlowerConfigStore(dataRoot);
 const discordFlowerManagerRef: { current: DiscordFlowerManager | null } = { current: null };
@@ -348,7 +427,11 @@ function syncGraph(): void {
 }
 
 {
+  if (GATEWAY_PERF_LOG) perfLog("phase: workspaceStore.load start");
+  const _tWsLoad = performance.now();
   const restored = workspaceStore.load();
+  if (GATEWAY_PERF_LOG) perfLog("phase: workspaceStore.load", `done in ${(performance.now() - _tWsLoad).toFixed(1)}ms`);
+  const _tRestore = performance.now();
   latestTeamPlan = restored.latestTeamPlan;
   bridgeGraphMeta = restored.bridgeGraphMeta ?? { startDistrictId: null };
   for (const district of restored.districts) {
@@ -368,6 +451,8 @@ function syncGraph(): void {
   jobStore.replaceAll(restored.conversations);
   jobStore.replaceArchives(restored.conversationArchives);
   auditLog.replaceAll(restored.auditEvents);
+  if (GATEWAY_PERF_LOG) perfLog("phase: restore maps + jobStore + auditLog.replaceAll", `done in ${(performance.now() - _tRestore).toFixed(1)}ms`);
+  const _tOrphan = performance.now();
   const orphanRemoved = reconcileOrphanTasks();
   let planTrimmed = 0;
   if (latestTeamPlan) {
@@ -405,13 +490,17 @@ function syncGraph(): void {
     }
   }
 
+  if (GATEWAY_PERF_LOG) perfLog("phase: reconcileOrphan + teamPlan trim/synth", `done in ${(performance.now() - _tOrphan).toFixed(1)}ms`);
+  const _tSyncGraph = performance.now();
   syncGraph();
+  if (GATEWAY_PERF_LOG) perfLog("phase: syncGraph", `done in ${(performance.now() - _tSyncGraph).toFixed(1)}ms`);
   if (orphanRemoved > 0 || planTrimmed > 0) {
     persistWorkspace();
     if (orphanRemoved > 0) {
       log("STATE", `removed ${orphanRemoved} orphan task(s) (district no longer exists)`);
     }
   }
+  const _tAuditScan = performance.now();
   const approvedFromAudit = new Set<string>();
   for (const ev of auditLog.list()) {
     if (ev.type === "bee.job.approved" && ev.payload && typeof ev.payload === "object" && "jobId" in ev.payload) {
@@ -419,6 +508,7 @@ function syncGraph(): void {
     }
   }
   approvalGate.reseedRestoredTasks(allTasks.values(), approvedFromAudit);
+  if (GATEWAY_PERF_LOG) perfLog("phase: audit scan + approvalGate.reseedRestoredTasks", `done in ${(performance.now() - _tAuditScan).toFixed(1)}ms`);
   log(
     "STATE",
     `workspace loaded: ${allDistricts.size} districts, ${allTasks.size} tasks, ${districtBridges.size} bridges, ${restored.auditEvents.length} audit events, approvals pending=${approvalGate.listPending().length} approved=${approvalGate.listApproved().length}`,
@@ -508,8 +598,14 @@ a{color:#2563eb}</style></head><body>
 </body></html>`);
 });
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", authMode: authConfig.mode });
+app.get("/health", (req, res) => {
+  const supplied = requestSecret(req);
+  const authed = supplied ? authorizeSecret(authConfig, supplied) : undefined;
+  res.json({
+    status: "ok",
+    authMode: authConfig.mode,
+    ...(authed === false ? { tokenValid: false } : {}),
+  });
 });
 
 app.post("/api/intake", requireAuth, (req, res) => {
@@ -1250,7 +1346,7 @@ app.post("/api/settings/auth/device/complete", requireAuth, asyncHandler(async (
     if (!redirectUrl) {
       res.status(400).json({
         error: "missing_redirect_url",
-        message: "로그인 후 리다이렉트된 URL을 붙여넣어 주세요.",
+        message: "Please paste the redirect URL from after login.",
       });
       return;
     }
@@ -1261,7 +1357,7 @@ app.post("/api/settings/auth/device/complete", requireAuth, asyncHandler(async (
       const urlState = u.searchParams.get("state");
       if (urlState && urlState !== session.codexState) {
         oauthDeviceSessions.delete(sessionId);
-        res.status(400).json({ error: "state_mismatch", message: "OAuth state가 일치하지 않습니다. 다시 시도해 주세요." });
+        res.status(400).json({ error: "state_mismatch", message: "OAuth state does not match. Please try again." });
         return;
       }
       const urlError = u.searchParams.get("error");
@@ -1275,7 +1371,7 @@ app.post("/api/settings/auth/device/complete", requireAuth, asyncHandler(async (
       if (!c) {
         res.status(400).json({
           error: "no_code_in_url",
-          message: "URL에서 code 파라미터를 찾을 수 없습니다. 리다이렉트된 전체 URL을 붙여넣어 주세요.",
+          message: "Could not find the code parameter in the URL. Please paste the full redirect URL.",
         });
         return;
       }
@@ -1283,7 +1379,7 @@ app.post("/api/settings/auth/device/complete", requireAuth, asyncHandler(async (
     } catch {
       res.status(400).json({
         error: "invalid_url",
-        message: "유효한 URL 형식이 아닙니다. 브라우저 주소창의 전체 URL을 복사해 주세요.",
+        message: "Invalid URL format. Please copy the full URL from your browser's address bar.",
       });
       return;
     }
@@ -1309,7 +1405,7 @@ app.post("/api/settings/auth/device/complete", requireAuth, asyncHandler(async (
       log("AUTH", `OpenAI Codex token exchange error: ${err}`);
       res.status(502).json({
         error: "codex_token_exchange_failed",
-        message: err instanceof Error ? err.message : "토큰 교환 실패. 다시 시도해 주세요.",
+        message: err instanceof Error ? err.message : "Token exchange failed. Please try again.",
       });
     }
     return;
@@ -3199,7 +3295,7 @@ app.post("/api/admin/restart", requireAuth, (_req, res) => {
   res.status(202).json({
     ok: true,
     message:
-      "Gateway process is stopping. If you use npm run dev:gateway or a process manager with restart, start it again when it does not come back automatically.",
+      "Gateway process is stopping. If you use beebridge gateway start, npm run start:gateway, or a process manager with restart, start it again when it does not come back automatically.",
   });
   setImmediate(() => {
     cdpRelay.stop();
@@ -3223,18 +3319,38 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
   res.status(500).json({ error: "internal_server_error" });
 });
 
+if (GATEWAY_PERF_LOG) perfLog("phase: creating DiscordFlowerManager + sync()");
+const _tDiscordSync = performance.now();
 discordFlowerManagerRef.current = new DiscordFlowerManager({
   getConfigs: () => flowerConfigStore.getAll(),
   chatDeps: runChatMessageDeps,
   log,
 });
-void discordFlowerManagerRef.current.sync().catch((e) => log("DISCORD", `initial sync: ${String(e)}`));
+void discordFlowerManagerRef.current
+  .sync()
+  .then(() => {
+    if (GATEWAY_PERF_LOG) perfLog("phase: DiscordFlowerManager.sync", `done in ${(performance.now() - _tDiscordSync).toFixed(1)}ms`);
+  })
+  .catch((e) => log("DISCORD", `initial sync: ${String(e)}`));
 
+if (GATEWAY_PERF_LOG) perfLog("phase: app.listen", "scheduling HTTP bind…");
+const _tListen = performance.now();
 const server = app.listen(PORT, () => {
+  if (GATEWAY_PERF_LOG) perfLog("phase: app.listen callback", `port bound after ${(performance.now() - _tListen).toFixed(1)}ms from listen()`);
   log("SERVER", `beebridge gateway listening on :${PORT}`);
   log("SERVER", `auth mode: ${authConfig.mode}`);
+  if (authConfig.mode === "token" && authConfig.token) {
+    log("SERVER", `gateway token: ${authConfig.token}`);
+    log("SERVER", `  file: ${BEEGATEWAY_TOKEN_FILE}`);
+    log("SERVER", `  paste this into the Chrome extension popup and Settings → Connection if needed.`);
+  }
+  const _tCdp = performance.now();
   cdpRelay.start(CDP_RELAY_PORT);
-  log("SERVER", `CDP relay (Flower DevTools) on 127.0.0.1:${CDP_RELAY_PORT} (token=GATEWAY_TOKEN)`);
+  if (GATEWAY_PERF_LOG) perfLog("phase: cdpRelay.start", `done in ${(performance.now() - _tCdp).toFixed(1)}ms`);
+  log(
+    "SERVER",
+    `CDP relay (Flower DevTools) on 127.0.0.1:${CDP_RELAY_PORT}`,
+  );
 });
 gatewayHttpServer = server;
 
@@ -3243,8 +3359,8 @@ gatewayWss = wss;
 wss.on("connection", (socket, req) => {
   const context = resolveWsAuthContext(req, authConfig);
   if (!context.authenticated) {
-    log("WS", `connection rejected: ${context.reason}`);
-    socket.send(JSON.stringify({ type: "error", reason: context.reason }));
+    log("WS", `connection rejected: ${context.reason} from=${req.socket.remoteAddress ?? "?"} url=${req.url ?? "?"}`);
+    socket.send(JSON.stringify({ type: "error", reason: "unauthorized" }));
     socket.close();
     return;
   }
@@ -3253,9 +3369,24 @@ wss.on("connection", (socket, req) => {
   let registeredFlowerId: string | null = null;
 
   log("WS", `client connected: ${context.clientId}`);
+  if (GATEWAY_PERF_LOG) perfLog("WS_CONNECT", `${context.clientId} from ${req.socket.remoteAddress ?? "?"}`);
   socket.send(JSON.stringify({ type: "ready", clientId: context.clientId }));
 
   socket.on("message", (raw) => {
+    if (GATEWAY_PERF_LOG) {
+      perfWsMsgInWindow += 1;
+      const now = Date.now();
+      if (now - perfWsWindowStart >= 10_000) {
+        if (perfWsMsgInWindow >= 120) {
+          perfLog(
+            "WS_MSG_RATE",
+            `${perfWsMsgInWindow} inbound /ws messages in ${now - perfWsWindowStart}ms — possible Flower or web client reconnect storm`,
+          );
+        }
+        perfWsMsgInWindow = 0;
+        perfWsWindowStart = now;
+      }
+    }
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw.toString());
@@ -3368,7 +3499,10 @@ wss.on("connection", (socket, req) => {
 });
 
 function gracefulShutdown() {
+  if (GATEWAY_PERF_LOG) perfLog("shutdown", "SIGTERM/SIGINT — gracefulShutdown");
   log("SERVER", "shutting down, flushing stores...");
+  const killed = cleanupAllProcessManagers();
+  if (killed > 0) log("SERVER", `killed ${killed} background child process(es)`);
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
   try { persistWorkspace(); } catch (e) { log("SERVER", `persistWorkspace failed: ${e}`); }
   try { graphStore.flushSync(); } catch (e) { log("SERVER", `graphStore.flushSync failed: ${e}`); }

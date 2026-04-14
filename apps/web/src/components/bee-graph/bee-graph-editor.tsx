@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ReactFlow,
   Background,
@@ -140,8 +140,8 @@ function BeeNode({ data }: NodeProps) {
   const waveBadgeColor = wi ? WAVE_COLORS[wi.wave % WAVE_COLORS.length] : "#6b7280";
   const stepLabel = wi
     ? wi.parallelCount > 1
-      ? `Step ${wi.wave + 1} (${wi.parallelCount}개 병렬)`
-      : `Step ${wi.wave + 1} (순차)`
+      ? `Step ${wi.wave + 1} (${wi.parallelCount} parallel)`
+      : `Step ${wi.wave + 1} (sequential)`
     : "";
 
   return (
@@ -416,20 +416,21 @@ function InnerEditor({
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-  const refreshWaves = useCallback(
-    (currentEdges: Edge[]) => {
-      setNodes((nds) => applyWaveInfo(nds, currentEdges));
-    },
-    [setNodes],
-  );
+  const propSyncRef = useRef(false);
 
   useEffect(() => {
-    refreshWaves(edges);
-  }, [edges, refreshWaves]);
+    propSyncRef.current = true;
+    setEdges(initialEdges);
+    setNodes(applyWaveInfo(initialNodes, initialEdges));
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   useEffect(() => {
-    setNodes(applyWaveInfo(initialNodes, edges));
-  }, [initialNodes, edges, setNodes]);
+    if (propSyncRef.current) {
+      propSyncRef.current = false;
+      return;
+    }
+    setNodes((nds) => applyWaveInfo(nds, edges));
+  }, [edges, setNodes]);
 
   const deleteEdgesByIds = useCallback(
     (ids: Set<string>) => {

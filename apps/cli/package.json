@@ -11,6 +11,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@beebridge/shared": "0.1.0",
     "commander": "^13.1.0"
   },
   "devDependencies": {

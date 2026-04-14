@@ -296,9 +296,9 @@ export async function runOnboard(options: { installDaemon?: boolean; yes?: boole
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown auth setup error";
     process.stdout.write(`\n[ERROR] Auth setup failed: ${message}\n`);
-    process.stdout.write("Hint: start gateway first (`npm run dev:gateway`) and set:\n");
+    process.stdout.write("Hint: start gateway first (`beebridge gateway start` or `npm run start:gateway`) and set:\n");
     process.stdout.write("  beebridge_GATEWAY_URL=http://localhost:4321\n");
-    process.stdout.write("  beebridge_GATEWAY_TOKEN=dev-token\n");
+    process.stdout.write("  beebridge_GATEWAY_TOKEN=<or omit: reads ~/.beebridge/gateway-token>\n");
     throw error;
   }
   await runDaemonStepIfNeeded(state);

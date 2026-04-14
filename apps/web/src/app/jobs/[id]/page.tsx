@@ -326,7 +326,7 @@ export default function TaskDetailPage() {
     } catch (e: any) {
       const msg = e?.message ?? "";
       if (msg.includes("cycle_detected")) {
-        alert("순환 의존성이 감지되었습니다. 해당 연결은 저장되지 않습니다.");
+        alert("A circular dependency was detected. The connection was not saved.");
       } else {
         console.error("Failed to save task graph:", e);
       }

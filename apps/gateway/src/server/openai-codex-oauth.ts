@@ -237,7 +237,7 @@ export async function createCodexCallbackSession(timeoutMs: number): Promise<Cal
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(
-        "<!DOCTYPE html><html><body><p>Beebridge: 로그인되었습니다. 이 창을 닫아도 됩니다.</p></body></html>",
+        "<!DOCTYPE html><html><body><p>Beebridge: Login successful. You may close this window.</p></body></html>",
       );
       if (timeoutId) clearTimeout(timeoutId);
       try {

@@ -10,14 +10,42 @@ interface ProcessSession {
 
 const MAX_OUTPUT_LINES = 5000;
 
+/** Kill an entire process group so child processes (e.g. esbuild spawned by Vite) are also reaped. */
+function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  const pid = proc.pid;
+  if (pid == null) { proc.kill(signal); return; }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { proc.kill(signal); } catch { /* already dead */ }
+  }
+}
+
+const activeManagers = new Set<ProcessManager>();
+
+/** Kill all background processes across all active ProcessManager instances (gateway shutdown). */
+export function cleanupAllProcessManagers(): number {
+  let killed = 0;
+  for (const mgr of activeManagers) {
+    killed += mgr.activeCount();
+    mgr.cleanup();
+  }
+  return killed;
+}
+
 export class ProcessManager {
   private sessions = new Map<string, ProcessSession>();
   private nextId = 1;
+
+  constructor() {
+    activeManagers.add(this);
+  }
 
   start(command: string, cwd: string): string {
     const sessionId = `proc-${this.nextId++}`;
     const proc = spawn("/bin/sh", ["-c", command], {
       cwd,
+      detached: true,
       env: { ...process.env, HOME: process.env.HOME },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -75,9 +103,9 @@ export class ProcessManager {
     const session = this.sessions.get(sessionId);
     if (!session) return `Session not found: ${sessionId}`;
     if (session.exitCode !== null) return `Process already exited with code ${session.exitCode}`;
-    session.proc.kill("SIGTERM");
+    killProcessTree(session.proc, "SIGTERM");
     setTimeout(() => {
-      if (session.exitCode === null) session.proc.kill("SIGKILL");
+      if (session.exitCode === null) killProcessTree(session.proc, "SIGKILL");
     }, 3000);
     return "Kill signal sent";
   }
@@ -104,12 +132,19 @@ export class ProcessManager {
     return result;
   }
 
+  activeCount(): number {
+    let n = 0;
+    for (const [, s] of this.sessions) { if (s.exitCode === null) n++; }
+    return n;
+  }
+
   cleanup(): void {
     for (const [, session] of this.sessions) {
       if (session.exitCode === null) {
-        session.proc.kill("SIGKILL");
+        killProcessTree(session.proc, "SIGKILL");
       }
     }
     this.sessions.clear();
+    activeManagers.delete(this);
   }
 }
