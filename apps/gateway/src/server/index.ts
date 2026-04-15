@@ -1,6 +1,6 @@
 import express from "express";
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import { AuthRateLimit } from "../auth/rate-limit.js";
 import { resolveWsAuthContext } from "../auth/ws-auth-context.js";
@@ -68,7 +68,6 @@ import {
 } from "./openai-codex-oauth.js";
 import {
   BEEGATEWAY_TOKEN_FILE,
-  loadOrCreatePersistedGatewayToken,
   persistGatewayTokenFileIfChanged,
 } from "@beebridge/shared/gateway-token-file";
 
@@ -170,23 +169,17 @@ let authToken = process.env.GATEWAY_TOKEN?.trim() || undefined;
 const authPassword = process.env.GATEWAY_PASSWORD?.trim() || undefined;
 
 if (authMode === "token" && !authToken) {
-  const { token, created } = loadOrCreatePersistedGatewayToken();
-  authToken = token;
-  if (created) {
-    log(
-      "AUTH",
-      `Gateway token was missing. Generated a new token and saved it to ${BEEGATEWAY_TOKEN_FILE} (same format as OpenClaw: random hex). Set GATEWAY_TOKEN to override.`,
-    );
-  }
+  authToken = randomBytes(24).toString("hex");
+  log(
+    "AUTH",
+    `Generated a new gateway token for this startup and saved it to ${BEEGATEWAY_TOKEN_FILE}. Set GATEWAY_TOKEN to keep a fixed token.`,
+  );
 } else if (authMode === "none" && !authToken && !authPassword) {
-  const { token, created } = loadOrCreatePersistedGatewayToken();
-  authToken = token;
-  if (created) {
-    log(
-      "AUTH",
-      `GATEWAY_AUTH_MODE is none but CDP relay still needs a secret. Saved token to ${BEEGATEWAY_TOKEN_FILE}.`,
-    );
-  }
+  authToken = randomBytes(24).toString("hex");
+  log(
+    "AUTH",
+    `GATEWAY_AUTH_MODE is none; generated a new startup secret for CDP relay and saved it to ${BEEGATEWAY_TOKEN_FILE}.`,
+  );
 }
 
 const authConfig: GatewayAuthConfig = {

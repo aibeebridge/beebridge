@@ -90,9 +90,14 @@ function autoPollWaitingLabel(providerId: string, verificationUri: string): stri
 }
 
 export function PmSettingsPanel() {
-  const { token: appGatewayToken } = useGateway();
-  const [gatewayUrl, setGatewayUrl] = useState("http://localhost:4321");
-  const [gatewayToken, setGatewayToken] = useState(() => appGatewayToken);
+  const {
+    url: appGatewayUrl,
+    token: appGatewayToken,
+    setUrl: setAppGatewayUrl,
+    setToken: setAppGatewayToken,
+  } = useGateway();
+  const gatewayUrl = appGatewayUrl || "http://localhost:4321";
+  const gatewayToken = appGatewayToken;
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -179,11 +184,13 @@ export function PmSettingsPanel() {
   const onConnect = useCallback(async () => {
     try {
       await loadSettings();
+      setAppGatewayUrl(gatewayUrl);
+      setAppGatewayToken(gatewayToken.trim());
       setNotice("Settings loaded.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load settings.");
     }
-  }, [loadSettings]);
+  }, [gatewayToken, gatewayUrl, loadSettings, setAppGatewayToken, setAppGatewayUrl]);
 
   const onCreateProfile = useCallback(async () => {
     if (!secret.trim()) {
@@ -600,11 +607,11 @@ export function PmSettingsPanel() {
               <div className="field-grid">
                 <label>
                   Gateway URL
-                  <input value={gatewayUrl} onChange={(event) => setGatewayUrl(event.target.value)} />
+                  <input value={gatewayUrl} onChange={(event) => setAppGatewayUrl(event.target.value)} />
                 </label>
                 <label>
                   Gateway Token
-                  <input value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} />
+                  <input value={gatewayToken} onChange={(event) => setAppGatewayToken(event.target.value)} />
                 </label>
               </div>
               <button type="button" onClick={onConnect}>

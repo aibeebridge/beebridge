@@ -22,6 +22,9 @@ export const DEFAULT_PUBLIC_GATEWAY_TOKEN =
     ? process.env.NEXT_PUBLIC_GATEWAY_TOKEN
     : "";
 
+const LS_GATEWAY_URL_KEY = "beebridge.gateway.url";
+const LS_GATEWAY_TOKEN_KEY = "beebridge.gateway.token";
+
 export function mergeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   if (a.aborted) return a;
   if (b.aborted) return b;
@@ -194,16 +197,53 @@ export function GatewayProvider({
   initialToken?: string;
 }) {
   /** Empty = same-origin `/api`, `/health`, `/ws` via Next rewrites → gateway (see next.config.ts). */
-  const [url, setUrl] = useState("");
-  const [token, setToken] = useState(() => DEFAULT_PUBLIC_GATEWAY_TOKEN || initialToken || "");
+  const [url, setUrl] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(LS_GATEWAY_URL_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [token, setToken] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = window.localStorage.getItem(LS_GATEWAY_TOKEN_KEY);
+        if (saved && saved.trim()) return saved.trim();
+      } catch {
+        // ignore
+      }
+    }
+    return DEFAULT_PUBLIC_GATEWAY_TOKEN || initialToken || "";
+  });
   const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (url.trim()) window.localStorage.setItem(LS_GATEWAY_URL_KEY, url.trim());
+      else window.localStorage.removeItem(LS_GATEWAY_URL_KEY);
+    } catch {
+      // ignore storage failures
+    }
+  }, [url]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (token.trim()) window.localStorage.setItem(LS_GATEWAY_TOKEN_KEY, token.trim());
+      else window.localStorage.removeItem(LS_GATEWAY_TOKEN_KEY);
+    } catch {
+      // ignore storage failures
+    }
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/gateway-token")
       .then((r) => r.json())
       .then((data: { token?: string }) => {
-        if (!cancelled && data?.token && data.token !== token) {
+        if (!cancelled && !token && data?.token && data.token !== token) {
           setToken(data.token);
         }
       })
