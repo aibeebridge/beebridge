@@ -13,6 +13,18 @@ node beebridge.mjs --help
 
 If `apps/cli/dist/index.js` is missing, the root loader exits with a message to run `npm run build:cli` first.
 
+## `beebridge` on your PATH (recommended)
+
+After a release build, from **`~/.beebridge`** (or your clone root):
+
+```bash
+npm link
+```
+
+This registers the package’s **`bin`** entry ([`package.json`](../../package.json)) so you can run **`beebridge`** instead of **`node beebridge.mjs`** from any directory. To remove later: **`npm unlink -g beebridge`** (or from the same directory, **`npm unlink`**).
+
+Same commands either way — for example **`beebridge start --daemon`** (both servers) or **`beebridge gateway start --daemon`**.
+
 ## Default behavior (no arguments)
 
 Running `node beebridge.mjs` with **no subcommand** launches the **keyboard-driven terminal TUI** ([`launchTerminalGui`](../../apps/cli/src/tui/terminal-gui.ts)).
@@ -23,7 +35,7 @@ To print help instead, pass `--help` or a subcommand (e.g. `node beebridge.mjs g
 
 | Variable | Used by | Default | Purpose |
 |----------|---------|---------|---------|
-| `beebridge_HOME` | Repo resolution ([`repo-root.ts`](../../apps/cli/src/repo-root.ts)), root [`beebridge.mjs`](../../beebridge.mjs) | Repo root containing `beebridge.mjs` | Working directory for `npm run start:gateway` / `start:web` (or `dev:*` with `--dev`) spawned by CLI |
+| `beebridge_HOME` | Repo resolution ([`repo-root.ts`](../../apps/cli/src/repo-root.ts)), root [`beebridge.mjs`](../../beebridge.mjs) | If unset: **`~/.beebridge`** when that folder has `package.json` and a built CLI (`apps/cli/dist/index.js`); otherwise the directory of `beebridge.mjs` | Working directory for `npm run start:gateway` / `start:web` (or `dev:*` with `--dev`) spawned by CLI |
 | `beebridge_GATEWAY_URL` | Manager, task, project, TUI | `http://localhost:4321` | Gateway HTTP base URL for API calls |
 | `beebridge_GATEWAY_TOKEN` | Same | _(unset)_ | Bearer token; falls back to `GATEWAY_TOKEN`, then `~/.beebridge/gateway-token` if present |
 | `PORT` | `gateway` / `web` start commands | `4321` (gateway) / `3000` (web) via each command | Listen port when starting servers |
@@ -32,13 +44,15 @@ GitHub Copilot device login (`manager auth login --provider github-copilot`) req
 
 ## Production vs development
 
-By default, `gateway start|restart` and `web start|restart` run **production** scripts: `npm run start:gateway` (compiled `dist/`) and `npm run start:web` (`next start`). Run **`npm run build`** from the repo root first.
+By default, `gateway start|restart` and `web start|restart` run **production** scripts: `npm run start:gateway` (compiled `dist/`) and `npm run start:web` (`next start`). Run **`npm run build:release`** (same as **`npm run build`**) from the repo root first.
+
+For faster iteration when only workspace packages change, **`npm run build:libs`** builds `shared`, `worker-browser`, and `core` only; it does **not** build the gateway `dist` or the Next.js `.next` output, so production `start` (without `--dev`) still requires a full **`build:release`**.
 
 Pass **`--dev`** to use **`npm run dev:gateway`** (tsx) or **`npm run dev:web`** (`next dev`) instead.
 
 ## Daemon mode (`-d` / `--daemon`)
 
-`beebridge gateway start|restart` and `beebridge web start|restart` accept **`--daemon`**. The CLI spawns the chosen npm script **detached**, with:
+`beebridge gateway start|restart`, `beebridge web start|restart`, and **`beebridge servers restart`** accept **`--daemon`** ( **`servers restart` requires it** ). The CLI spawns the chosen npm script **detached**, with:
 
 - Logs: `.beebridge-daemon/<gateway|web>-<port>.log`
 - PID file: `.beebridge-daemon/<gateway|web>-<port>.pid`
@@ -121,6 +135,24 @@ Interactive first-time setup (PM auth, model, runtime).
 
 Sends **SIGTERM** to any process(es) listening on those ports (same mechanism as the first half of `gateway restart` / `web restart`). On Windows, port-based stop is not supported yet ([`port-utils.ts`](../../apps/cli/src/port-utils.ts)).
 
+### `start` (top-level)
+
+| Option | Description |
+|--------|-------------|
+| `--gateway-port <port>` | Gateway port (default: `4321`, or `PORT` env) |
+| `--web-port <port>` | Web UI port (default: `3000`) |
+| **`-d` / `--daemon` (required)** | Start **gateway and web** as background processes (same as two `gateway start --daemon` + `web start --daemon`) |
+| `--dev` | Use `dev:gateway` + `dev:web` instead of production |
+| `-o` / `--open` | Open `/dashboard` after the web server starts |
+
+Does **not** stop existing listeners first — use **`servers restart --daemon`** to stop then start. For foreground logs, use two terminals with **`gateway start`** and **`web start`** (no `--daemon`).
+
+### `servers`
+
+| Subcommand | Options | Description |
+|------------|---------|-------------|
+| `restart` | `--gateway-port`, `--web-port`, **`-d` / `--daemon` (required)**, `--dev`, `-o` / `--open` | Stop gateway and web ports, then start **gateway first**, then **web**. Use **`--daemon`** to run both in the background in one terminal; for foreground logs, use **`gateway restart`** and **`web restart`** in two terminals instead. |
+
 ### `gateway`
 
 | Subcommand | Options | Description |
@@ -150,6 +182,7 @@ Launch the terminal GUI explicitly (same as running `beebridge` with no args, bu
 
 ## See also
 
+- [Deployment (git clone)](./deployment.md) — production build and `servers restart`
 - [Web Settings](./web-settings.md) — Settings tabs opened by `manager setup` / `web settings`
 - [Bridge graph](./bridge-graph.md) — districts / export (UI, not CLI-specific)
-- Root [`package.json`](../../package.json) — npm scripts `start:gateway`, `start:web`, `dev:gateway`, `dev:web`, `build`, `build:cli`, etc.
+- Root [`package.json`](../../package.json) — npm scripts `start:daemon` (`beebridge start --daemon`), `start:gateway`, `start:web`, `dev:gateway`, `dev:web`, `build`, `build:release`, `build:libs`, `build:cli`, `servers:restart:daemon`, etc.

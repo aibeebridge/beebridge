@@ -13,7 +13,12 @@
   "scripts": {
     "beebridge": "node beebridge.mjs",
     "link:global": "npm link",
-    "build": "npm run --workspaces build",
+    "setup": "npm install && npm run build:release",
+    "build": "npm run build:release",
+    "build:release": "npm run build -w @beebridge/shared && npm run build -w @beebridge/worker-browser && npm run build -w @beebridge/core && npm run build -w @beebridge/cli && npm run build -w @beebridge/gateway && npm run build -w @beebridge/web && npm run install:home",
+    "install:home": "node scripts/install-home.mjs",
+    "build:libs": "npm run build -w @beebridge/shared && npm run build -w @beebridge/worker-browser && npm run build -w @beebridge/core",
+    "build:workspaces": "npm run --workspaces --if-present build",
     "build:cli": "npm --workspace @beebridge/cli run build",
     "dev:gateway": "npm --workspace @beebridge/gateway run dev",
     "dev:gateway:perf": "npm --workspace @beebridge/gateway run dev:perf",
@@ -28,6 +33,8 @@
     "web:start": "node beebridge.mjs web start",
     "web:restart": "node beebridge.mjs web restart",
     "web:start:daemon": "node beebridge.mjs web start --daemon",
-    "web:restart:daemon": "node beebridge.mjs web restart --daemon"
+    "web:restart:daemon": "node beebridge.mjs web restart --daemon",
+    "servers:restart:daemon": "node beebridge.mjs servers restart --daemon",
+    "start:daemon": "node beebridge.mjs start --daemon"
   }
 }

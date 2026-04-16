@@ -29,14 +29,14 @@ Gateway (Node)                    Extension (Flower)                 Chrome tab
 
 - **Gateway** (`apps/gateway`) -- Express + WebSockets: jobs/history, chat routing, optional Discord hooks, codegen/code-executor paths, CDP relay and browser agent loop (including Waggle).
 - **Web UI** (`apps/web`) -- Next.js: bridges, jobs, flowers UI, settings.
-- **CLI** (`apps/cli`) -- Invoked via repo-root `beebridge.mjs` after `npm run build:cli`; starts **compiled** gateway and **production** Next.js by default, with `--dev` for `tsx` / `next dev`, plus `stop`, `gateway token`, onboarding, and a keyboard TUI (see [CLI](#cli) and [`docs/guides/cli.md`](docs/guides/cli.md)).
+- **CLI** (`apps/cli`) -- After **`npm run build:release`**, use **`npm link`** in **`~/.beebridge`** to run **`beebridge`** on your PATH (see [CLI](#cli)). Top-level **`beebridge start --daemon`** starts gateway + web in production; **`--dev`** switches to dev servers. Also **`stop`**, **`servers restart`**, **`gateway token`**, onboarding, TUI ([`docs/guides/cli.md`](docs/guides/cli.md)).
 - **Chrome extension** (`extension/`) -- Relay + debugger attach; use the popup **Attach DevTools to this tab** so the badge shows **ON**.
 
 ## Documentation
 
 | Guide | Topics |
 |-------|--------|
-| [`docs/guides/cli.md`](docs/guides/cli.md) | **CLI** commands, `beebridge_HOME` / `beebridge_GATEWAY_*`, daemon logs, `manager setup` -> Settings URL |
+| [`docs/guides/cli.md`](docs/guides/cli.md) | **`npm link`**, **`beebridge start --daemon`**, `beebridge_HOME` / `beebridge_GATEWAY_*`, daemon logs, `manager setup` -> Settings URL |
 | [`docs/guides/web-settings.md`](docs/guides/web-settings.md) | **Web Settings** (`/settings`): Connection, Profiles, Model Policy, Workspace, Diagnostics; gateway APIs |
 | [`docs/guides/bridge-graph.md`](docs/guides/bridge-graph.md) | Districts & bridges, JSON **export/import** (`beebridge.bridge-settings.v1`), **pipeline run** along one-way bridges, upstream tasks / `{{bridgeOut:...}}` |
 | [`docs/guides/waggle-mode.md`](docs/guides/waggle-mode.md) | Waggle supervisor/worker harness in the Flower agent loop |
@@ -51,62 +51,90 @@ Full dependency notes: [`INSTALL.md`](INSTALL.md).
 
 ## Installation
 
+Same flow as **[`INSTALL.md`](INSTALL.md) — Quick Start** (details, env, and troubleshooting live there).
+
+Clone anywhere. **`npm run build:release`** (same as **`npm run build`**) compiles everything **and** syncs into **`~/.beebridge`** (see [`scripts/install-home.mjs`](scripts/install-home.mjs); uses **`rsync`** on macOS/Linux). **`gateway-token`** and **`config.json`** under **`~/.beebridge`** are not overwritten by that sync.
+
 ```bash
+# 1. Clone (example path)
 git clone https://github.com/aibeebridge/beebridge.git
 cd beebridge
 
+# 2. Install dependencies
 npm install
 
-# Full workspace build (gateway dist + Next.js .next + shared packages). Required before production gateway/web.
-npm run build
+# 3. Production build + install into ~/.beebridge
+npm run build:release
 
-# CLI entrypoint at repo root (`node beebridge.mjs ...`)
-npm run build:cli
+# 4. npm link (once) — then you can type `beebridge` instead of `node beebridge.mjs`
+cd ~/.beebridge && npm link
+
+# 5. Start gateway + web (production) in the background — one command
+beebridge start --daemon
+# Same without PATH: node ~/.beebridge/beebridge.mjs start --daemon
+# Single service: beebridge gateway start --daemon  /  beebridge web start --daemon
+# After upgrade: beebridge servers restart --daemon
+# Dev servers: beebridge start --daemon --dev
+
 ```
 
-You can build individual workspaces instead (e.g. only `packages/shared`, `packages/core`, `@beebridge/gateway`) when iterating, but **`beebridge gateway start` / `web start` without `--dev` expect a full build** — see [`docs/guides/cli.md`](docs/guides/cli.md).
+After step 3, the launcher prefers **`~/.beebridge`** when that build exists (override with **`beebridge_HOME`**). Load the Chrome extension from **`~/.beebridge/extension`**.
+
+Use **`npm run build:libs`** for a faster package-only rebuild when developing with **`--dev`** (does not run **`install:home`**). Refresh **`~/.beebridge`** with **`npm run install:home`** or **`npm run build:release`**. More: [`docs/guides/deployment.md`](docs/guides/deployment.md), [`docs/guides/cli.md`](docs/guides/cli.md).
 
 ## Running
 
-**Defaults:** CLI `gateway` / `web` commands run **`npm run start:gateway`** (compiled `node dist/...`) and **`npm run start:web`** (`next start`). Pass **`--dev`** to use **`dev:gateway`** (tsx) or **`dev:web`** (`next dev`) without requiring those production artifacts.
+**Preferred:** with **`npm link`** (see [Installation](#installation)), use **`beebridge start --daemon`** to run **gateway + web** in production in the background. **`beebridge gateway start --daemon`** / **`beebridge web start --daemon`** start one side only. Add **`--dev`** for **`tsx`** / **`next dev`**.
+
+Without **`npm link`**, run **`node ~/.beebridge/beebridge.mjs …`** (or **`node beebridge.mjs`** from the install directory).
+
+**Same behavior via npm:** **`npm run start:gateway`** / **`npm run start:web`** (production) or **`npm run start:daemon`** (= **`beebridge start --daemon`**).
 
 ### Gateway (API + WebSocket + CDP relay)
 
 ```bash
-npm run start:gateway
-# or: npm run dev:gateway   # development (tsx)
+cd ~/.beebridge
+beebridge gateway start --daemon
+# Foreground: beebridge gateway start
+# npm: npm run start:gateway
 # Default HTTP API: http://localhost:4321  (not the Next.js UI)
 ```
 
 ### Web UI
 
 ```bash
-npm run start:web
-# or: npm run dev:web   # development (next dev)
+cd ~/.beebridge
+beebridge web start --daemon
+# Foreground: beebridge web start
+# npm: npm run start:web
 # Default: http://localhost:3000
 ```
 
 ### CLI
 
-Requires **`npm run build:cli`**. Run from the repo root as `node beebridge.mjs …` or `npm run beebridge -- …`. Full reference: [`docs/guides/cli.md`](docs/guides/cli.md).
+Requires a built CLI (**`npm run build:release`** includes it). After **`npm link`** in **`~/.beebridge`**, run **`beebridge …`**; otherwise **`node beebridge.mjs …`**. Full reference: [`docs/guides/cli.md`](docs/guides/cli.md).
 
 | Command | Purpose |
 |---------|---------|
+| **`start`** | Start **gateway + web** together; **`--daemon`** runs both in background (production unless **`--dev`**) |
 | `gateway start` \| `restart` | Production gateway (`start:gateway`). **`--dev`** → `dev:gateway`. **`--daemon`** → background; logs under `.beebridge-daemon/gateway-<port>.log` |
 | `web start` \| `restart` | Production web (`start:web`). **`--dev`** → `dev:web`. **`--daemon`**, **`--open`** (open `/dashboard`) |
+| `servers restart` | Stop both ports, then start gateway + web (**`--daemon`** required) |
 | `web settings`, `manager setup` | Open **Settings** in the browser; **`--dev`** optional |
 | `stop` | **`SIGTERM`** anything listening on **4321** (gateway) and **3000** (web); override with **`--gateway-port`** / **`--web-port`** |
 | `gateway token` | Print the current gateway auth token (same file as `~/.beebridge/gateway-token` when auto-generated) |
 | `onboard` | First-time PM auth / model setup |
 | _(no args)_ or `tui` | Keyboard-driven terminal UI |
 
-Convenience npm scripts in the root `package.json` mirror these (e.g. `gateway:start:daemon`, `web:start:daemon`).
+Convenience npm scripts in the root `package.json` mirror these (e.g. `start:daemon`, `gateway:start:daemon`, `web:start:daemon`).
 
 ```bash
-node beebridge.mjs gateway start
-node beebridge.mjs web start
-node beebridge.mjs stop
-# Add --dev to either start/restart for development servers instead of production.
+beebridge start --daemon
+beebridge gateway start --daemon
+beebridge web start --daemon
+beebridge servers restart --daemon
+beebridge stop
+# Or: node ~/.beebridge/beebridge.mjs …   Add --dev for development servers.
 ```
 
 ### Chrome extension
@@ -119,7 +147,7 @@ node beebridge.mjs stop
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `beebridge_HOME` | _(auto)_ | If set, repo root for spawned `npm run` commands from the CLI ([`repo-root.ts`](apps/cli/src/repo-root.ts)). |
+| `beebridge_HOME` | _(auto)_ | Repo root for spawned `npm run` commands ([`repo-root.ts`](apps/cli/src/repo-root.ts)). If unset, [`beebridge.mjs`](beebridge.mjs) uses **`~/.beebridge`** when it contains a full built tree; otherwise the directory of the `beebridge.mjs` you executed. |
 | `beebridge_GATEWAY_URL` | `http://localhost:4321` | Gateway HTTP base URL for CLI / TUI API calls. |
 | `beebridge_GATEWAY_TOKEN` | _(optional)_ | Bearer token; falls back to `GATEWAY_TOKEN` or `~/.beebridge/gateway-token`. |
 | `GATEWAY_TOKEN` | _(auto)_ | If unset, a token is generated (OpenClaw-style 48-char hex) and saved under `~/.beebridge/gateway-token`. Set this to override. |

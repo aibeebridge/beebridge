@@ -20,6 +20,7 @@ import {
   managerSettingsShow,
 } from "./commands/manager-settings.js";
 import { restartGatewayUi, startGatewayUi } from "./commands/gateway.js";
+import { restartServers, startServers } from "./commands/servers.js";
 import { stopBeebridgeServers } from "./commands/stop.js";
 import { openSettingsUi, restartWebUi, startWebUi } from "./commands/web.js";
 
@@ -155,6 +156,43 @@ program
       process.stderr.write(`${message}\n`);
       process.exit(1);
     }
+  });
+
+program
+  .command("start")
+  .description("Start gateway and web together (use --daemon for both in background)")
+  .option("--gateway-port <port>", "gateway port (default: 4321, or PORT env)")
+  .option("--web-port <port>", "web UI port (default: 3000)")
+  .option("-d, --daemon", "run both in background; logs under .beebridge-daemon/")
+  .option("--dev", "run dev:gateway and dev:web instead of production")
+  .option("-o, --open", "open /dashboard in browser after web starts")
+  .action(async (opts) => {
+    await startServers({
+      gatewayPort: opts.gatewayPort,
+      webPort: opts.webPort,
+      daemon: opts.daemon,
+      dev: opts.dev,
+      open: opts.open,
+    });
+  });
+
+const servers = program.command("servers").description("Gateway and web UI together");
+servers
+  .command("restart")
+  .description("Stop gateway and web ports, then start both (requires --daemon)")
+  .option("--gateway-port <port>", "gateway port (default: 4321, or PORT env)")
+  .option("--web-port <port>", "web UI port (default: 3000)")
+  .option("-d, --daemon", "required: run both in background; logs under .beebridge-daemon/")
+  .option("--dev", "run dev:gateway and dev:web instead of production")
+  .option("-o, --open", "open /dashboard in browser after web starts")
+  .action(async (opts) => {
+    await restartServers({
+      gatewayPort: opts.gatewayPort,
+      webPort: opts.webPort,
+      daemon: opts.daemon,
+      dev: opts.dev,
+      open: opts.open,
+    });
   });
 
 const gateway = program.command("gateway").description("Gateway API / WebSocket server");

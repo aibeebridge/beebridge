@@ -12,37 +12,45 @@
 
 **Public site:** <https://aibeebridge.pages.dev/>
 
+Clone **anywhere** you like for development. **`npm run build:release`** (same as **`npm run build`**) compiles everything **and** syncs the tree into **`~/.beebridge`**, which is the default runtime install (see [`scripts/install-home.mjs`](scripts/install-home.mjs); uses **`rsync`** on macOS/Linux). Files such as **`gateway-token`** and **`config.json`** under `~/.beebridge` are **not** overwritten by that sync.
+
 ```bash
-# 1. Clone
+# 1. Clone (example path)
 git clone https://github.com/aibeebridge/beebridge.git
 cd beebridge
 
-# 2. Install all dependencies
+# 2. Install dependencies
 npm install
 
-# 3. Build (required before production gateway/web or CLI start)
-npm run build
+# 3. Production build + install into ~/.beebridge
+npm run build:release
 
-# 4. Build the CLI (required before `node beebridge.mjs …`)
-npm run build:cli
+# 4. (Optional, recommended) Put `beebridge` on your PATH — then use short commands below
+cd ~/.beebridge
+npm link
 
-# 5. Start gateway server (production)
-npm run start:gateway
-# Development: npm run dev:gateway
+# 5. Start gateway + web in production (compiled gateway + next start). Easiest: both at once in the background
+beebridge start --daemon
+# Or without npm link: node ~/.beebridge/beebridge.mjs start --daemon
 
-# 6. Start web UI (in a new terminal)
-npm run start:web
-# Development: npm run dev:web
+# One service at a time (also production unless you add --dev):
+#   beebridge gateway start --daemon
+#   beebridge web start --daemon
+
+# Restart after a code update (stops ports, then starts both): beebridge servers restart --daemon
+# Development (tsx / next dev): beebridge start --daemon --dev
 ```
 
-Use the **CLI** from the repo root to start/stop gateway and web together, open settings, or run the terminal UI — see [`docs/guides/cli.md`](docs/guides/cli.md) and the [CLI section in README.md](README.md#cli).
+Use **`npm run build:cli`** only when you iterate on the CLI alone; run **`npm run install:home`** afterward to refresh **`~/.beebridge`**, or run **`npm run build:release`** again. Full CLI reference: [`docs/guides/cli.md`](docs/guides/cli.md) and [README.md](README.md#cli).
+
+The root [`beebridge.mjs`](beebridge.mjs) loads the built CLI from **`~/.beebridge`** when that install exists (override with **`beebridge_HOME`**). Unlink the global command with **`npm unlink -g beebridge`** when needed.
 
 ## Chrome Extension Setup
 
 1. Open `chrome://extensions/` in Google Chrome
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select the `extension/` folder from this repository
+4. Select the **`extension`** folder — after a release build, use **`~/.beebridge/extension`** (or the same folder inside your git clone)
 5. Click the extension icon to verify connection status
 
 ## Environment Variables
