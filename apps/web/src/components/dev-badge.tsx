@@ -10,6 +10,9 @@ import {
 } from "../context/gateway";
 
 export function DevBadge() {
+  const isProdBuild = process.env.NODE_ENV === "production";
+  const buildLabel = isProdBuild ? "prod" : "dev";
+  const envLabel = isProdBuild ? "production" : "development";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { url, token, connected } = useGateway();
@@ -46,7 +49,7 @@ export function DevBadge() {
         <div className="dev-badge-panel">
           <div className="dev-badge-panel-header">
             <strong>beebridge</strong>
-            <span className="dev-badge-version">{info?.version ?? "dev"}</span>
+            <span className="dev-badge-version">{info?.version ?? buildLabel}</span>
           </div>
           <div className="dev-badge-panel-rows">
             <div className="dev-badge-row">
@@ -66,7 +69,7 @@ export function DevBadge() {
             )}
             <div className="dev-badge-row">
               <span className="dev-badge-label">Env</span>
-              <span>development</span>
+              <span>{envLabel}</span>
             </div>
           </div>
         </div>
