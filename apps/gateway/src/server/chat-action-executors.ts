@@ -63,6 +63,142 @@ function pickFlowerForBee(
   return { flowerType: "browser", flower: `${runtime.providerId}-browser` };
 }
 
+function inferNeedsCodeFromMission(mission: string): boolean {
+  return /(코드|코딩|버그|리팩터|패치|함수|파일 수정|repo|repository|code|coding|refactor|bug|patch|compile|build|test)/i
+    .test(mission);
+}
+
+const REUSE_THRESHOLD = 0.82;
+const CHILD_THRESHOLD = 0.62;
+
+function normalizeIntentText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/user-facing output language[\s\S]*$/i, "")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenSet(text: string): Set<string> {
+  const stop = new Set(["the", "a", "an", "to", "for", "of", "and", "or", "in", "on", "with", "this", "that"]);
+  return new Set(
+    normalizeIntentText(text)
+      .split(" ")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 1 && !stop.has(t)),
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) {
+    if (b.has(t)) inter++;
+  }
+  const union = a.size + b.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function intentSimilarity(left: string, right: string): number {
+  const lNorm = normalizeIntentText(left);
+  const rNorm = normalizeIntentText(right);
+  if (!lNorm || !rNorm) return 0;
+  if (lNorm === rNorm) return 1;
+  const jt = jaccardSimilarity(tokenSet(lNorm), tokenSet(rNorm));
+  if (lNorm.includes(rNorm) || rNorm.includes(lNorm)) return Math.max(jt, 0.88);
+  return jt;
+}
+
+function looksLikeSimpleQuery(mission: string): boolean {
+  const t = normalizeIntentText(mission);
+  if (!t) return false;
+  const qy = /(질문|질의|문의|답변|요약|설명|what|why|how|summarize|explain|quick|brief)/i.test(t);
+  const heavy = /(구현|개발|설계|작성|수정|코드|버그|테스트|배포|implement|build|create|write|fix|refactor|code|debug|deploy|test)/i.test(t);
+  const tokenCount = t.split(" ").length;
+  return qy && !heavy && tokenCount <= 20;
+}
+
+function roleSimilarity(left: string, right: string): number {
+  return left === right ? 1 : 0.35;
+}
+
+function collectDistrictBees(
+  district: BeeDistrict,
+  latestTeamPlan: TeamPlan | null,
+  allTasks: Map<string, BeeTask>,
+): BeePersona[] {
+  const byId = new Map((latestTeamPlan?.bees ?? []).map((b) => [b.id, b]));
+  const out: BeePersona[] = [];
+  const seen = new Set<string>();
+  for (const id of district.beeRosterIds ?? []) {
+    const bee = byId.get(id);
+    if (bee && !seen.has(bee.id)) {
+      out.push(bee);
+      seen.add(bee.id);
+    }
+  }
+  for (const task of allTasks.values()) {
+    if (task.districtId !== district.id) continue;
+    const pid = task.personaId || task.bee;
+    if (!pid || seen.has(pid)) continue;
+    const bee = byId.get(pid);
+    if (bee) {
+      out.push(bee);
+      seen.add(bee.id);
+    }
+  }
+  for (const bee of latestTeamPlan?.bees ?? []) {
+    if (!bee.scopedTaskId || seen.has(bee.id)) continue;
+    const task = allTasks.get(bee.scopedTaskId);
+    if (task?.districtId === district.id) {
+      out.push(bee);
+      seen.add(bee.id);
+    }
+  }
+  return out;
+}
+
+function rankClosestBee(
+  candidates: BeePersona[],
+  mission: string,
+  role: string,
+): { bee: BeePersona; total: number; semantic: number } | null {
+  let best: { bee: BeePersona; total: number; semantic: number } | null = null;
+  for (const bee of candidates) {
+    const seed = bee.intentSignature || bee.systemPrompt;
+    const semantic = intentSimilarity(mission, seed);
+    const intentMatch = roleSimilarity(role, bee.role);
+    const total = 0.7 * semantic + 0.3 * intentMatch;
+    if (!best || total > best.total) {
+      best = { bee, total, semantic };
+    }
+  }
+  return best;
+}
+
+function childActionTag(role: string): string {
+  if (role === "coder") return "build";
+  if (role === "reviewer") return "review";
+  if (role === "writer") return "draft";
+  if (role === "analyst") return "analyze";
+  return "followup";
+}
+
+function nextChildName(parent: BeePersona, role: string, districtBees: BeePersona[]): string {
+  const tag = childActionTag(role);
+  const prefix = `${parent.name}.${tag}.`;
+  let maxSeq = 0;
+  for (const bee of districtBees) {
+    if (!bee.name.startsWith(prefix)) continue;
+    const tail = bee.name.slice(prefix.length);
+    const n = Number.parseInt(tail, 10);
+    if (Number.isFinite(n)) maxSeq = Math.max(maxSeq, n);
+  }
+  const next = String(maxSeq + 1).padStart(2, "0");
+  return `${prefix}${next}`;
+}
+
 export function execSetupPlan(args: SetupPlanArgs, d: ChatActionDeps): string {
   if (!args.bees?.length) {
     return "Error: bees array must be non-empty.";
@@ -148,27 +284,61 @@ export function execSetupPlan(args: SetupPlanArgs, d: ChatActionDeps): string {
     d.allDistricts.set(id, district);
   }
 
+  const existingDistrictBees = isNewDistrict ? [] : collectDistrictBees(district, latestTeamPlan, d.allTasks);
+
   const createdBees: BeePersona[] = [];
   const createdTasks: BeeTask[] = [];
-  let prevTaskId: string | undefined;
+  const reusedBees: BeePersona[] = [];
 
   for (let seq = 0; seq < args.bees.length; seq++) {
     const spec = args.bees[seq]!;
-    const beeId = newBeeId();
     const role = String(spec.role ?? "researcher").trim();
-    const { flowerType, flower } = pickFlowerForBee(runtime, role, spec.needsCode);
+    const normalizedNeedsCode = spec.needsCode === true || inferNeedsCodeFromMission(spec.mission);
+    const { flowerType, flower } = pickFlowerForBee(runtime, role, normalizedNeedsCode);
 
     const missionLocalized = appendOutputLocale(spec.mission);
-    const bee: BeePersona = {
-      id: beeId,
-      name: spec.name,
-      role,
-      systemPrompt: missionLocalized,
-      providerId: runtime.providerId,
-      model: runtime.model,
-      flowerType,
-    };
-    createdBees.push(bee);
+    const intentSignature = normalizeIntentText(spec.mission);
+    const best = isNewDistrict ? null : rankClosestBee(existingDistrictBees, spec.mission, role);
+    const simpleQuery = looksLikeSimpleQuery(spec.mission);
+
+    let bee: BeePersona;
+    let assignmentMode: "reuse" | "child" | "new" = "new";
+    if (best && best.total >= REUSE_THRESHOLD) {
+      bee = best.bee;
+      assignmentMode = "reuse";
+      reusedBees.push(bee);
+    } else {
+      const beeId = newBeeId();
+      if (best && best.total >= CHILD_THRESHOLD) {
+        bee = {
+          id: beeId,
+          name: nextChildName(best.bee, role, [...existingDistrictBees, ...createdBees]),
+          role,
+          systemPrompt: `${missionLocalized}\n\nDerived from parent bee: ${best.bee.name} (${best.bee.id}).`,
+          providerId: runtime.providerId,
+          model: runtime.model,
+          flowerType,
+          intentSignature,
+          parentBeeId: best.bee.id,
+          lineageKind: "child",
+        };
+        assignmentMode = "child";
+      } else {
+        bee = {
+          id: beeId,
+          name: spec.name,
+          role,
+          systemPrompt: missionLocalized,
+          providerId: runtime.providerId,
+          model: runtime.model,
+          flowerType,
+          intentSignature,
+          lineageKind: simpleQuery ? "anchor" : "worker",
+        };
+      }
+      createdBees.push(bee);
+      existingDistrictBees.push(bee);
+    }
 
     let suffix = randomUUID().slice(0, 8);
     let taskId = `task-${String(seq).padStart(6, "0")}-${suffix}`;
@@ -177,30 +347,30 @@ export function execSetupPlan(args: SetupPlanArgs, d: ChatActionDeps): string {
       taskId = `task-${String(seq).padStart(6, "0")}-${suffix}`;
     }
 
-    let description = missionLocalized;
-    if (prevTaskId) {
-      description = `${missionLocalized}\n\nPrior task output (resolved at run time): {{bridgeOut:${prevTaskId}}}`;
-    }
-
     const task: BeeTask = {
       id: taskId,
-      title: `${args.title} — ${spec.name}`,
-      description,
+      title: `${args.title} — ${bee.name}`,
+      description: missionLocalized,
       districtId: district.id,
       cityId: district.cityId,
-      bee: beeId,
+      bee: bee.id,
       flower,
-      assignee: beeId,
+      assignee: bee.id,
       dueDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
       priority,
       requiresApproval: args.requiresApproval === true,
       status: "waiting",
-      personaId: beeId,
+      personaId: bee.id,
       responseLocale,
     };
+    if (assignmentMode === "reuse") {
+      task.description = `${task.description}\n\nReuse mode: assigned to existing anchor/worker bee ${bee.id}.`;
+    }
+    if (assignmentMode === "child" && bee.parentBeeId) {
+      task.description = `${task.description}\n\nChild bee lineage: parent=${bee.parentBeeId}.`;
+    }
     createdTasks.push(task);
     d.allTasks.set(taskId, task);
-    prevTaskId = taskId;
 
     const sched: TaskSchedule = { repeatType: "once", maxRetries: 3, retryCount: 0, enabled: true };
     d.taskSchedules.set(taskId, sched);
@@ -213,17 +383,17 @@ export function execSetupPlan(args: SetupPlanArgs, d: ChatActionDeps): string {
     }
   }
 
-  const hasDependsOnBees = args.bees.some((b) => b.dependsOnBees && b.dependsOnBees.length > 0);
-  if (hasDependsOnBees) {
-    for (let i = 0; i < args.bees.length; i++) {
-      const spec = args.bees[i]!;
-      const task = createdTasks[i]!;
-      if (spec.dependsOnBees && spec.dependsOnBees.length > 0) {
-        task.dependsOn = spec.dependsOnBees
-          .filter((idx) => idx >= 0 && idx < createdTasks.length && idx !== i)
-          .map((idx) => createdTasks[idx]!.id);
-      }
-    }
+  for (let i = 0; i < args.bees.length; i++) {
+    const spec = args.bees[i]!;
+    const task = createdTasks[i]!;
+    const deps = (spec.dependsOnBees ?? [])
+      .filter((idx) => idx >= 0 && idx < createdTasks.length && idx !== i)
+      .map((idx) => createdTasks[idx]!.id);
+    if (deps.length === 0) continue;
+
+    task.dependsOn = deps;
+    const bridges = deps.map((id) => `{{bridgeOut:${id}}}`).join("\n");
+    task.description = `${task.description}\n\nPrior task output (resolved at run time):\n${bridges}`;
   }
 
   district.beeRosterIds = [...(district.beeRosterIds ?? []), ...createdBees.map((b) => b.id)];
@@ -266,6 +436,10 @@ export function execSetupPlan(args: SetupPlanArgs, d: ChatActionDeps): string {
   for (const bee of createdBees) {
     const task = createdTasks.find((t) => t.personaId === bee.id);
     lines.push(`Bee "${bee.name}" (${bee.id}) role=${bee.role} flower=${bee.flowerType} — Task ${task?.id ?? "?"} [${priority}]`);
+  }
+  for (const bee of reusedBees) {
+    const task = createdTasks.find((t) => t.personaId === bee.id);
+    lines.push(`Bee "${bee.name}" (${bee.id}) reused — Task ${task?.id ?? "?"} [${priority}]`);
   }
   if (autoRunTasks.length > 0) {
     lines.push(

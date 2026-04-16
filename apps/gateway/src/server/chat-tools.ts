@@ -103,6 +103,7 @@ export const CHAT_ACTION_TOOLS: ChatCompletionTool[] = [
         "Create a new district with bees and tasks, or add bees/tasks to an existing district. " +
         "Auto-configures waggle mode and flower type based on task requirements. " +
         "Use when the user wants to create work items, add tasks, start a new project, or assign bees. " +
+        "Within one district, setup_plan auto-reuses highly similar existing bees for repeated/simple requests and may derive a child bee for similar follow-up actions. " +
         "Waggle (supervisor) is OFF by default; set waggleMode to 'browser' only when needsWaggle is true for a bee or the user wants supervisor assistance. needsBrowser alone enables the browser Flower but does NOT enable Waggle. " +
         "Before creating a brand-new district, use list_districts (or graph context): if the user is continuing the same project or topic, pass targetDistrictId to add bees/tasks there — do not create duplicate districts for follow-up messages. " +
         "Each bee must include a detailed non-empty mission (what to build/do); empty missions are rejected.",
@@ -352,6 +353,10 @@ Auto-configuration guidelines:
 - responseLocale: pass the router intent responseLocale (or infer from the user's language) on every setup_plan so bee output matches the user's language.
 - If a bee's mission is purely analytical without visiting sites, needsBrowser is false.
 - For programming or repo work, use role "coder" and/or needsCode: true so the code Flower is used.
+- Split bees by domain only when it materially helps:
+  * Single-domain tasks (only coding, only research, only review, only writing) should default to ONE bee.
+  * Mixed-domain tasks (e.g., research + coding, coding + review, analysis + writing) should split into specialized bees.
+  * If split-vs-single is ambiguous, ask one short clarification question before calling setup_plan.
 - Use dependsOnBees to define the execution graph within a district:
   * Analyze task dependencies: if bee B needs output from bee A, set bee B's dependsOnBees to [index of A].
   * Independent tasks (e.g., parallel research on different topics) should have empty dependsOnBees for concurrent execution.
@@ -363,6 +368,8 @@ Auto-configuration guidelines:
 - When the user doesn't specify a district, create a new one automatically — do NOT ask which district.
 - When the user says "new task" or similar without specifying a district, create a new district.
 - For follow-ups on the same project (e.g. calculator, same app name), prefer list_districts then setup_plan with targetDistrictId instead of spawning another district.
+- In the same district, keep names/missions semantically consistent for repeated simple queries so setup_plan can reuse the same bee instead of spawning new ones.
+- For similar but non-identical follow-up actions, keep the role/topic close to the parent bee so setup_plan can derive a child bee lineage automatically.
 - Infer reasonable defaults: priority=medium, waggle auto-detected from bee missions.
 - When the user mentions Chrome relay, Flower, or code extension, set waggle/flower accordingly.
 - When tasks span multiple districts with data dependencies, create bridges between them.

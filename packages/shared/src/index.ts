@@ -184,6 +184,12 @@ export interface BeePersona {
   flowerType: FlowerType;
   /** When set, this persona row belongs to a specific task (same district may have multiple task-scoped teams). */
   scopedTaskId?: string;
+  /** Stable normalized mission fingerprint used to reuse similar bees in the same district. */
+  intentSignature?: string;
+  /** Parent bee id when this bee is derived as a follow-up child. */
+  parentBeeId?: string;
+  /** Simple lineage marker for routing/reuse (anchor|worker|child). */
+  lineageKind?: "anchor" | "worker" | "child";
 }
 
 export interface CityPlan {

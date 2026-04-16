@@ -564,6 +564,16 @@ function normalizeBeeFromPlanBody(b: unknown, runtime: PmRuntimeContext, idx: nu
   const ft = o.flowerType === "api" || o.flowerType === "browser" || o.flowerType === "code" ? o.flowerType : "browser";
   const scopedTaskId =
     typeof o.scopedTaskId === "string" && o.scopedTaskId.trim() ? o.scopedTaskId.trim() : undefined;
+  const intentSignature =
+    typeof o.intentSignature === "string" && o.intentSignature.trim() ? o.intentSignature.trim() : undefined;
+  const parentBeeId =
+    typeof o.parentBeeId === "string" && o.parentBeeId.trim() ? o.parentBeeId.trim() : undefined;
+  const lineageKindRaw =
+    typeof o.lineageKind === "string" && o.lineageKind.trim() ? o.lineageKind.trim() : undefined;
+  const lineageKind =
+    lineageKindRaw === "anchor" || lineageKindRaw === "worker" || lineageKindRaw === "child"
+      ? lineageKindRaw
+      : undefined;
   return {
     id,
     name: String(o.name ?? `Bee ${idx + 1}`),
@@ -573,6 +583,9 @@ function normalizeBeeFromPlanBody(b: unknown, runtime: PmRuntimeContext, idx: nu
     model: String(o.model ?? ""),
     flowerType: ft as FlowerType,
     ...(scopedTaskId ? { scopedTaskId } : {}),
+    ...(intentSignature ? { intentSignature } : {}),
+    ...(parentBeeId ? { parentBeeId } : {}),
+    ...(lineageKind ? { lineageKind } : {}),
   };
 }
 
@@ -1998,6 +2011,15 @@ function normalizeImportedBee(raw: Record<string, unknown>): BeePersona | null {
     ...(typeof raw.scopedTaskId === "string" && raw.scopedTaskId.trim()
       ? { scopedTaskId: raw.scopedTaskId.trim() }
       : {}),
+    ...(typeof raw.intentSignature === "string" && raw.intentSignature.trim()
+      ? { intentSignature: raw.intentSignature.trim() }
+      : {}),
+    ...(typeof raw.parentBeeId === "string" && raw.parentBeeId.trim()
+      ? { parentBeeId: raw.parentBeeId.trim() }
+      : {}),
+    ...(raw.lineageKind === "anchor" || raw.lineageKind === "worker" || raw.lineageKind === "child"
+      ? { lineageKind: raw.lineageKind }
+      : {}),
   };
 }
 
@@ -2801,6 +2823,16 @@ app.put("/api/districts/:districtId/bees", requireAuth, (req, res) => {
       typeof o.scopedTaskId === "string" && o.scopedTaskId.trim()
         ? o.scopedTaskId.trim()
         : scope;
+    const intentSignature =
+      typeof o.intentSignature === "string" && o.intentSignature.trim() ? o.intentSignature.trim() : undefined;
+    const parentBeeId =
+      typeof o.parentBeeId === "string" && o.parentBeeId.trim() ? o.parentBeeId.trim() : undefined;
+    const lineageKindRaw =
+      typeof o.lineageKind === "string" && o.lineageKind.trim() ? o.lineageKind.trim() : undefined;
+    const lineageKind =
+      lineageKindRaw === "anchor" || lineageKindRaw === "worker" || lineageKindRaw === "child"
+        ? lineageKindRaw
+        : undefined;
     return {
       id,
       name: String(o.name ?? `Bee ${idx + 1}`),
@@ -2810,6 +2842,9 @@ app.put("/api/districts/:districtId/bees", requireAuth, (req, res) => {
       model: String(o.model ?? ""),
       flowerType: ft as FlowerType,
       ...(st ? { scopedTaskId: st } : {}),
+      ...(intentSignature ? { intentSignature } : {}),
+      ...(parentBeeId ? { parentBeeId } : {}),
+      ...(lineageKind ? { lineageKind } : {}),
     };
   };
 
