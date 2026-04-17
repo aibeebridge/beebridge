@@ -227,6 +227,12 @@ const taskSchedules = new Map<string, TaskSchedule>();
 const allTasks = new Map<string, BeeTask>();
 const allDistricts = new Map<string, BeeDistrict>();
 const districtBridges = new Map<string, DistrictBridge>();
+const INTERNAL_SCHEDULER_ENABLED = process.env.BEEBRIDGE_DISABLE_INTERNAL_SCHEDULER !== "1";
+const SCHEDULER_POLL_MS = Number(process.env.BEEBRIDGE_SCHEDULER_POLL_MS ?? 30_000);
+const SCHEDULER_RETRY_DELAY_MS = Number(process.env.BEEBRIDGE_SCHEDULER_RETRY_DELAY_MS ?? 5 * 60_000);
+const SCHEDULER_STAGGER_SEC = Number(process.env.BEEBRIDGE_SCHEDULER_STAGGER_SEC ?? 300);
+let schedulerTimer: ReturnType<typeof setInterval> | null = null;
+let schedulerTickRunning = false;
 if (GATEWAY_PERF_LOG) perfLog("phase: GraphStore ctor start");
 const _tGraphStore = performance.now();
 const graphStore = new GraphStore(workspaceRoot);
@@ -708,10 +714,12 @@ app.post("/api/plan", requireAuth, (req, res, next) => {
         };
         taskSchedules.set(task.id, sched);
         task.schedule = sched;
+        refreshScheduleNextRun(task.id, sched, Date.now());
       } else {
         const defaultSched: TaskSchedule = { repeatType: "once", maxRetries: 3, retryCount: 0, enabled: true };
         taskSchedules.set(task.id, defaultSched);
         task.schedule = defaultSched;
+        refreshScheduleNextRun(task.id, defaultSched, Date.now());
       }
     }
 
@@ -753,7 +761,7 @@ app.post("/api/plan", requireAuth, (req, res, next) => {
 
 type RunQueueOptions = {
   /** audit payload `source` (default: approval-style queue). */
-  auditSource?: "approval" | "bridge-pipeline" | "chat-setup_plan";
+  auditSource?: "approval" | "bridge-pipeline" | "chat-setup_plan" | "scheduler";
   /** Persist one row to bridges/pipeline-runs.json after run. */
   savePipelineHistory?: { startDistrictId: string };
 };
@@ -793,6 +801,389 @@ function buildQueueExtrasForBridgeTask(task: BeeTask, completed: CompletedTaskIn
 }
 
 let queueRunning = false;
+
+function parseIsoMs(value?: string): number | undefined {
+  if (!value || typeof value !== "string") return undefined;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : undefined;
+}
+
+function toIsoOrUndefined(ms?: number): string | undefined {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return undefined;
+  return new Date(ms).toISOString();
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  const floored = Math.floor(value);
+  if (floored < min) return min;
+  if (floored > max) return max;
+  return floored;
+}
+
+function hashStable(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function resolveStaggerWindowMs(taskId: string): number {
+  const baseSec = Math.max(0, Math.floor(SCHEDULER_STAGGER_SEC));
+  if (baseSec <= 0) return 0;
+  const baseMs = baseSec * 1000;
+  const priority = allTasks.get(taskId)?.priority ?? "medium";
+  if (priority === "high") {
+    return Math.max(5_000, Math.floor(baseMs * 0.35));
+  }
+  if (priority === "low") {
+    return Math.max(5_000, Math.floor(baseMs * 1.5));
+  }
+  return baseMs;
+}
+
+function applyStaggerMs(taskId: string, baseMs: number): number {
+  const windowMs = resolveStaggerWindowMs(taskId);
+  if (windowMs <= 0) return baseMs;
+  const offsetMs = hashStable(taskId) % windowMs;
+  return baseMs + offsetMs;
+}
+
+function isScheduleConfigured(sched: TaskSchedule): boolean {
+  if (!sched.enabled) return false;
+  if (sched.repeatType === "once") {
+    return parseIsoMs(sched.deadline ?? sched.nextRunAt) !== undefined;
+  }
+  if (sched.repeatType === "hourly") {
+    return typeof sched.intervalHours === "number" && Number.isFinite(sched.intervalHours) && sched.intervalHours > 0;
+  }
+  if (sched.repeatType === "daily") {
+    return (
+      typeof sched.dailyAtHour === "number" &&
+      Number.isFinite(sched.dailyAtHour) &&
+      typeof sched.dailyAtMinute === "number" &&
+      Number.isFinite(sched.dailyAtMinute)
+    );
+  }
+  if (sched.repeatType === "custom") {
+    return typeof sched.cronExpression === "string" && sched.cronExpression.trim().length > 0;
+  }
+  return false;
+}
+
+function matchesCronField(field: string, value: number, min: number, max: number): boolean {
+  const trimmed = field.trim();
+  if (!trimmed) return false;
+  if (trimmed === "*") return true;
+
+  const tokens = trimmed.split(",").map((t) => t.trim()).filter(Boolean);
+  if (tokens.length === 0) return false;
+
+  for (const token of tokens) {
+    const [rangeRaw, stepRaw] = token.split("/");
+    const step = stepRaw ? Number(stepRaw) : 1;
+    if (!Number.isFinite(step) || step <= 0) continue;
+
+    let rangeStart = min;
+    let rangeEnd = max;
+    const range = rangeRaw?.trim() ?? "*";
+
+    if (range !== "*") {
+      if (range.includes("-")) {
+        const [startRaw, endRaw] = range.split("-");
+        const start = Number(startRaw);
+        const end = Number(endRaw);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        rangeStart = clampInt(start, min, max);
+        rangeEnd = clampInt(end, min, max);
+      } else {
+        const single = Number(range);
+        if (!Number.isFinite(single)) continue;
+        rangeStart = clampInt(single, min, max);
+        rangeEnd = rangeStart;
+      }
+    }
+
+    if (rangeStart > rangeEnd) continue;
+    const normalizedValue = value === 0 && max === 7 ? 7 : value;
+    for (let cur = rangeStart; cur <= rangeEnd; cur += step) {
+      if (cur === value || cur === normalizedValue) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function cronMatches(expression: string, at: Date): boolean {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const [minExpr, hourExpr, dayExpr, monthExpr, weekExpr] = parts;
+  const minute = at.getMinutes();
+  const hour = at.getHours();
+  const day = at.getDate();
+  const month = at.getMonth() + 1;
+  const weekday = at.getDay();
+
+  if (!matchesCronField(minExpr, minute, 0, 59)) return false;
+  if (!matchesCronField(hourExpr, hour, 0, 23)) return false;
+  if (!matchesCronField(monthExpr, month, 1, 12)) return false;
+
+  const dayWildcard = dayExpr.trim() === "*";
+  const weekWildcard = weekExpr.trim() === "*";
+  const dayMatch = matchesCronField(dayExpr, day, 1, 31);
+  const weekMatch = matchesCronField(weekExpr, weekday, 0, 7);
+  const dateMatch = !dayWildcard && !weekWildcard ? (dayMatch || weekMatch) : (dayMatch && weekMatch);
+
+  return dateMatch;
+}
+
+function nextCronRunAtMs(expression: string, fromMs: number): number | undefined {
+  const base = Math.floor(fromMs / 60_000) * 60_000;
+  let cursor = base + 60_000;
+  const maxChecks = 400 * 24 * 60;
+  for (let i = 0; i < maxChecks; i += 1) {
+    if (cronMatches(expression, new Date(cursor))) {
+      return cursor;
+    }
+    cursor += 60_000;
+  }
+  return undefined;
+}
+
+function computeNextScheduleRunAtMs(sched: TaskSchedule, fromMs: number, afterRun: boolean): number | undefined {
+  if (!sched.enabled) return undefined;
+
+  if (sched.repeatType === "once") {
+    if (afterRun) return undefined;
+    return parseIsoMs(sched.deadline ?? sched.nextRunAt);
+  }
+
+  if (sched.repeatType === "hourly") {
+    const interval = clampInt(Number(sched.intervalHours ?? 1), 1, 24 * 365);
+    return fromMs + interval * 60 * 60_000;
+  }
+
+  if (sched.repeatType === "daily") {
+    const hour = clampInt(Number(sched.dailyAtHour ?? 9), 0, 23);
+    const minute = clampInt(Number(sched.dailyAtMinute ?? 0), 0, 59);
+    const dt = new Date(fromMs);
+    dt.setSeconds(0, 0);
+    dt.setHours(hour, minute, 0, 0);
+    if (dt.getTime() <= fromMs) dt.setDate(dt.getDate() + 1);
+    return dt.getTime();
+  }
+
+  if (sched.repeatType === "custom") {
+    if (!sched.cronExpression?.trim()) return undefined;
+    return nextCronRunAtMs(sched.cronExpression, fromMs);
+  }
+
+  return undefined;
+}
+
+function computeNextScheduledAtWithPolicy(
+  taskId: string,
+  sched: TaskSchedule,
+  fromMs: number,
+  afterRun: boolean,
+): number | undefined {
+  const base = computeNextScheduleRunAtMs(sched, fromMs, afterRun);
+  if (base === undefined) return undefined;
+  if (sched.repeatType === "once") return base;
+  return applyStaggerMs(taskId, base);
+}
+
+function refreshScheduleNextRun(taskId: string, sched: TaskSchedule, nowMs: number): boolean {
+  let changed = false;
+  if (!isScheduleConfigured(sched)) {
+    if (sched.nextRunAt !== undefined) {
+      sched.nextRunAt = undefined;
+      changed = true;
+    }
+    const task = allTasks.get(taskId);
+    if (task) task.schedule = sched;
+    return changed;
+  }
+
+  if (sched.repeatType === "once" && parseIsoMs(sched.lastRunAt) !== undefined) {
+    if (sched.enabled) {
+      sched.enabled = false;
+      changed = true;
+    }
+    if (sched.nextRunAt !== undefined) {
+      sched.nextRunAt = undefined;
+      changed = true;
+    }
+    const task = allTasks.get(taskId);
+    if (task) task.schedule = sched;
+    return changed;
+  }
+
+  const existingNext = parseIsoMs(sched.nextRunAt);
+  if (existingNext !== undefined && existingNext < nowMs) {
+    if (sched.repeatType === "once") {
+      if (sched.enabled) {
+        sched.enabled = false;
+        changed = true;
+      }
+      if (sched.nextRunAt !== undefined) {
+        sched.nextRunAt = undefined;
+        changed = true;
+      }
+    } else {
+      const computedFuture = computeNextScheduledAtWithPolicy(taskId, sched, nowMs, true);
+      const futureIso = toIsoOrUndefined(computedFuture);
+      if (sched.nextRunAt !== futureIso) {
+        sched.nextRunAt = futureIso;
+        changed = true;
+      }
+    }
+  } else if (existingNext === undefined) {
+    const computed = computeNextScheduledAtWithPolicy(taskId, sched, nowMs, false);
+    const nextIso = toIsoOrUndefined(computed);
+    if (sched.nextRunAt !== nextIso) {
+      sched.nextRunAt = nextIso;
+      changed = true;
+    }
+  }
+
+  const task = allTasks.get(taskId);
+  if (task) task.schedule = sched;
+  return changed;
+}
+
+async function runInternalSchedulerTick(): Promise<void> {
+  if (!INTERNAL_SCHEDULER_ENABLED || schedulerTickRunning) return;
+  schedulerTickRunning = true;
+  try {
+    const nowMs = Date.now();
+    let changed = false;
+    const dueTasks: BeeTask[] = [];
+
+    for (const [taskId, sched] of taskSchedules.entries()) {
+      if (refreshScheduleNextRun(taskId, sched, nowMs)) {
+        changed = true;
+      }
+      if (!isScheduleConfigured(sched)) continue;
+      const nextMs = parseIsoMs(sched.nextRunAt);
+      if (nextMs === undefined || nextMs > nowMs) continue;
+      const task = allTasks.get(taskId);
+      if (!task) continue;
+      const conv = jobStore.get(taskId);
+      if (conv?.status === "running") continue;
+      dueTasks.push(task);
+    }
+
+    if (changed) persistWorkspace();
+    if (dueTasks.length === 0) return;
+    if (queueRunning) {
+      log("SCHEDULE", `tick skipped: queue busy (${dueTasks.length} due task(s))`);
+      return;
+    }
+
+    dueTasks.sort((a, b) => {
+      const aMs = parseIsoMs(taskSchedules.get(a.id)?.nextRunAt) ?? 0;
+      const bMs = parseIsoMs(taskSchedules.get(b.id)?.nextRunAt) ?? 0;
+      return aMs - bMs;
+    });
+
+    log("SCHEDULE", `running ${dueTasks.length} due task(s)`);
+
+    queueRunning = true;
+    const noopRes = {
+      statusCode: 200,
+      status(this: { statusCode: number }, code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      json(_body: unknown) {
+        /* no HTTP response for scheduler run */
+      },
+    } as express.Response;
+
+    try {
+      await runApprovedJobsInner(noopRes, dueTasks, { auditSource: "scheduler" });
+    } finally {
+      queueRunning = false;
+    }
+
+    const finishedMs = Date.now();
+    const finishedIso = new Date(finishedMs).toISOString();
+    let postRunChanged = false;
+
+    for (const task of dueTasks) {
+      const sched = taskSchedules.get(task.id);
+      if (!sched) continue;
+      if (!isScheduleConfigured(sched)) continue;
+
+      const conv = jobStore.get(task.id);
+      const ok = conv?.status === "done";
+      sched.lastRunAt = finishedIso;
+
+      if (ok) {
+        sched.retryCount = 0;
+        const nextMs = computeNextScheduledAtWithPolicy(task.id, sched, finishedMs, true);
+        const nextIso = toIsoOrUndefined(nextMs);
+        if (sched.repeatType === "once") {
+          sched.enabled = false;
+          sched.nextRunAt = undefined;
+        } else {
+          sched.nextRunAt = nextIso;
+        }
+      } else {
+        const maxRetries = Math.max(0, Math.floor(sched.maxRetries ?? 0));
+        const attempt = Math.max(0, Math.floor(sched.retryCount ?? 0)) + 1;
+        if (attempt <= maxRetries) {
+          sched.retryCount = attempt;
+          sched.nextRunAt = toIsoOrUndefined(finishedMs + Math.max(1_000, SCHEDULER_RETRY_DELAY_MS));
+        } else {
+          sched.retryCount = 0;
+          if (sched.repeatType === "once") {
+            sched.enabled = false;
+            sched.nextRunAt = undefined;
+          } else {
+            const nextMs = computeNextScheduledAtWithPolicy(task.id, sched, finishedMs, true);
+            sched.nextRunAt = toIsoOrUndefined(nextMs);
+          }
+        }
+      }
+
+      const mappedTask = allTasks.get(task.id);
+      if (mappedTask) mappedTask.schedule = sched;
+      postRunChanged = true;
+    }
+
+    if (postRunChanged) persistWorkspace();
+  } catch (e) {
+    log("SCHEDULE", `tick failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    schedulerTickRunning = false;
+  }
+}
+
+function startInternalScheduler(): void {
+  if (!INTERNAL_SCHEDULER_ENABLED) {
+    log("SCHEDULE", "internal scheduler disabled via BEEBRIDGE_DISABLE_INTERNAL_SCHEDULER=1");
+    return;
+  }
+  if (schedulerTimer) return;
+  const pollMs = Math.max(1_000, Number.isFinite(SCHEDULER_POLL_MS) ? SCHEDULER_POLL_MS : 30_000);
+  schedulerTimer = setInterval(() => {
+    void runInternalSchedulerTick();
+  }, pollMs);
+  const staggerSec = Math.max(0, Number.isFinite(SCHEDULER_STAGGER_SEC) ? Math.floor(SCHEDULER_STAGGER_SEC) : 0);
+  log("SCHEDULE", `internal scheduler started (poll=${pollMs}ms, stagger=${staggerSec}s)`);
+  void runInternalSchedulerTick();
+}
+
+function stopInternalScheduler(): void {
+  if (!schedulerTimer) return;
+  clearInterval(schedulerTimer);
+  schedulerTimer = null;
+}
 
 /** Enqueue and run approved jobs (all / single / district·bee scope). Also handles bridge pipelines. */
 async function runApprovedJobsAndRespond(
@@ -1822,9 +2213,12 @@ app.put("/api/jobs/:jobId/schedule", requireAuth, (req, res) => {
     enabled: req.body.enabled ?? existing.enabled,
   };
   taskSchedules.set(taskId, updated);
+  refreshScheduleNextRun(taskId, updated, Date.now());
 
   const task = allTasks.get(taskId);
   if (task) task.schedule = updated;
+
+  persistWorkspace();
 
   log("SCHEDULE", `updated schedule for task ${taskId}: repeat=${updated.repeatType} maxRetries=${updated.maxRetries}`);
   auditLog.record({ type: "bee.task.schedule.updated", payload: { taskId, repeatType: updated.repeatType, maxRetries: updated.maxRetries } });
@@ -3379,6 +3773,7 @@ const server = app.listen(PORT, () => {
     "SERVER",
     `CDP relay (Flower DevTools) on 127.0.0.1:${CDP_RELAY_PORT}`,
   );
+  startInternalScheduler();
 });
 gatewayHttpServer = server;
 
@@ -3532,6 +3927,7 @@ function gracefulShutdown() {
   const killed = cleanupAllProcessManagers();
   if (killed > 0) log("SERVER", `killed ${killed} background child process(es)`);
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+  stopInternalScheduler();
   try { persistWorkspace(); } catch (e) { log("SERVER", `persistWorkspace failed: ${e}`); }
   try { graphStore.flushSync(); } catch (e) { log("SERVER", `graphStore.flushSync failed: ${e}`); }
   cdpRelay.stop();
