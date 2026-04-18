@@ -23,26 +23,38 @@ function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM")
 
 const activeManagers = new Set<ProcessManager>();
 
+/** Monotonic ids so session_id stays unique across tasks after running sessions are adopted into the gateway store. */
+let globalBackgroundSessionSeq = 1;
+
 /** Kill all background processes across all active ProcessManager instances (gateway shutdown). */
 export function cleanupAllProcessManagers(): number {
   let killed = 0;
-  for (const mgr of activeManagers) {
+  const snapshot = [...activeManagers];
+  for (const mgr of snapshot) {
     killed += mgr.activeCount();
-    mgr.cleanup();
+    mgr.cleanup({ killRunning: true });
   }
   return killed;
 }
 
 export class ProcessManager {
   private sessions = new Map<string, ProcessSession>();
-  private nextId = 1;
 
-  constructor() {
+  constructor(private readonly sessionIdPrefix = "proc") {
     activeManagers.add(this);
   }
 
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
+  /** Move a running session into this manager (used when a task ends without killing servers). */
+  adoptSession(sessionId: string, session: ProcessSession): void {
+    this.sessions.set(sessionId, session);
+  }
+
   start(command: string, cwd: string): string {
-    const sessionId = `proc-${this.nextId++}`;
+    const sessionId = `${this.sessionIdPrefix}-${globalBackgroundSessionSeq++}`;
     const proc = spawn("/bin/sh", ["-c", command], {
       cwd,
       detached: true,
@@ -138,13 +150,43 @@ export class ProcessManager {
     return n;
   }
 
-  cleanup(): void {
-    for (const [, session] of this.sessions) {
+  /**
+   * @param options.killRunning — default false: do not SIGKILL running children (e.g. dev servers).
+   *   Running sessions are handed off to `gatewayPersistentBackgroundProcesses` so `process()` keeps working.
+   *   Use true only for gateway shutdown (see cleanupAllProcessManagers).
+   */
+  cleanup(options?: { killRunning?: boolean }): void {
+    const killRunning = options?.killRunning === true;
+    if (killRunning) {
+      for (const [, session] of this.sessions) {
+        if (session.exitCode === null) {
+          killProcessTree(session.proc, "SIGKILL");
+        }
+      }
+      this.sessions.clear();
+      activeManagers.delete(this);
+      return;
+    }
+
+    for (const [id, session] of [...this.sessions]) {
       if (session.exitCode === null) {
-        killProcessTree(session.proc, "SIGKILL");
+        try {
+          session.proc.unref();
+        } catch {
+          /* ignore */
+        }
+        if (this !== gatewayPersistentBackgroundProcesses) {
+          gatewayPersistentBackgroundProcesses.adoptSession(id, session);
+        }
       }
     }
     this.sessions.clear();
     activeManagers.delete(this);
   }
 }
+
+/**
+ * Long-lived background commands (e.g. dev servers) started with run_command(..., persist_after_job=true).
+ * Survives individual code-task completion; cleared on gateway shutdown via cleanupAllProcessManagers().
+ */
+export const gatewayPersistentBackgroundProcesses = new ProcessManager("gw");

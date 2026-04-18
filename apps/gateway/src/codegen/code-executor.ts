@@ -4,7 +4,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { chatWithTools, type LlmConfig, resolveContextLimit, estimateMessageTokens } from "../browser/llm-client.js";
 import { CODE_TOOLS, SPAWN_TASK_TOOL, CHECK_TASK_TOOL, WAGGLE_ASK_TOOL } from "./code-tools.js";
 import { ProjectManager } from "./project-manager.js";
-import { ProcessManager } from "./process-manager.js";
+import { ProcessManager, gatewayPersistentBackgroundProcesses } from "./process-manager.js";
 import { SubTaskManager, type SubTaskResult } from "./subtask-manager.js";
 import { executeWaggle } from "../browser/waggle.js";
 import { applyBridgeOutPlaceholders } from "../server/bridge-execution.js";
@@ -91,6 +91,7 @@ function buildCodeSystemPrompt(
     "- Use grep to find code patterns before editing",
     "- Use read_file with offset/limit for large files (returns numbered lines)",
     "- Use run_command with background=true for long-running servers, then process to check output",
+    "- Background run_command sessions are not killed when the task ends; use process(action=\"kill\") or gateway shutdown to stop them. persist_after_job=true is optional (gw- session ids).",
     "- Do NOT append '&' to commands. For background work, set run_command(background=true) instead",
     "",
     "Best practices:",
@@ -157,7 +158,8 @@ function summarizeToolCalls(calls: { name: string; args: Record<string, unknown>
     if (t.name === "run_command" && typeof t.args.command === "string") {
       const cmd = t.args.command;
       const bg = t.args.background ? " &" : "";
-      return `run_command(${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}${bg})`;
+      const persist = t.args.persist_after_job ? ", persist" : "";
+      return `run_command(${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}${bg}${persist})`;
     }
     if (t.name === "process") return `process(${t.args.action})`;
     if (t.name === "spawn_task") {
@@ -273,6 +275,48 @@ function runShellCommand(
     );
     child.stdin?.end();
   });
+}
+
+function readBackgroundOutput(taskPm: ProcessManager, sessionId: string, offset: number): string {
+  if (taskPm.hasSession(sessionId)) return taskPm.readOutput(sessionId, offset);
+  if (gatewayPersistentBackgroundProcesses.hasSession(sessionId)) {
+    return gatewayPersistentBackgroundProcesses.readOutput(sessionId, offset);
+  }
+  return `Session not found: ${sessionId}`;
+}
+
+function killBackgroundProcess(taskPm: ProcessManager, sessionId: string): string {
+  if (taskPm.hasSession(sessionId)) return taskPm.kill(sessionId);
+  if (gatewayPersistentBackgroundProcesses.hasSession(sessionId)) {
+    return gatewayPersistentBackgroundProcesses.kill(sessionId);
+  }
+  return `Session not found: ${sessionId}`;
+}
+
+function statusBackgroundProcess(
+  taskPm: ProcessManager,
+  sessionId: string,
+): ReturnType<ProcessManager["status"]> {
+  if (taskPm.hasSession(sessionId)) return taskPm.status(sessionId);
+  if (gatewayPersistentBackgroundProcesses.hasSession(sessionId)) {
+    return gatewayPersistentBackgroundProcesses.status(sessionId);
+  }
+  return { status: "not_found" };
+}
+
+function listBackgroundSessions(taskPm: ProcessManager): string {
+  const lines: string[] = [];
+  for (const s of taskPm.list()) {
+    lines.push(
+      `${s.sessionId}: ${s.command} [${s.status}${s.exitCode !== undefined ? `, exit=${s.exitCode}` : ""}] (ends when this task finishes)`,
+    );
+  }
+  for (const s of gatewayPersistentBackgroundProcesses.list()) {
+    lines.push(
+      `${s.sessionId}: ${s.command} [${s.status}${s.exitCode !== undefined ? `, exit=${s.exitCode}` : ""}] (survives task completion; gateway shutdown stops it)`,
+    );
+  }
+  return lines.length > 0 ? lines.join("\n") : "(no background processes)";
 }
 
 function aggregateChildTokens(subtaskManager: SubTaskManager | null): { promptTokens: number; completionTokens: number } {
@@ -862,14 +906,28 @@ export async function executeCodeTask(
           ? trimmed.replace(/(^|[^\S\r\n])&\s*$/, "").trim()
           : commandRaw;
         const shouldBackground = background === true || inferredBackground;
+        const persistAfterJob = tc.args.persist_after_job === true;
+
+        if (persistAfterJob && !shouldBackground) {
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: "persist_after_job requires background=true (or a trailing '&' on the command).",
+          });
+          continue;
+        }
 
         if (shouldBackground) {
-          const sessionId = processManager.start(command, projectPath);
+          const targetPm = persistAfterJob ? gatewayPersistentBackgroundProcesses : processManager;
+          const sessionId = targetPm.start(command, projectPath);
           const modeHint = inferredBackground
             ? `\n(Note: trailing '&' in command was normalized to managed background mode.)`
             : "";
+          const persistHint = persistAfterJob
+            ? "\nThis process is kept running after the task completes until the Beebridge gateway stops or you call process(action=\"kill\")."
+            : "";
           const msg =
-            `Background process started: session_id="${sessionId}"\nUse process(action="read_output", session_id="${sessionId}") to check output.${modeHint}`;
+            `Background process started: session_id="${sessionId}"\nUse process(action="read_output", session_id="${sessionId}") to check output.${modeHint}${persistHint}`;
           sendProgress("run_command", `$ ${command} & → ${sessionId}`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: msg });
           continue;
@@ -912,11 +970,10 @@ export async function executeCodeTask(
         const sessionId = tc.args.session_id as string | undefined;
 
         if (action === "list") {
-          const sessions = processManager.list();
-          const result = sessions.length > 0
-            ? sessions.map((s) => `${s.sessionId}: ${s.command} [${s.status}${s.exitCode !== undefined ? `, exit=${s.exitCode}` : ""}]`).join("\n")
-            : "(no background processes)";
-          sendProgress("process", `list: ${sessions.length} sessions`, codeSource);
+          const result = listBackgroundSessions(processManager);
+          const n =
+            processManager.list().length + gatewayPersistentBackgroundProcesses.list().length;
+          sendProgress("process", `list: ${n} sessions`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: result });
           continue;
         }
@@ -928,15 +985,15 @@ export async function executeCodeTask(
 
         if (action === "read_output") {
           const offset = typeof tc.args.offset === "number" ? tc.args.offset : 0;
-          const output = processManager.readOutput(sessionId, offset);
+          const output = readBackgroundOutput(processManager, sessionId, offset);
           sendProgress("process", `read_output(${sessionId})`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: capToolResult(output) });
         } else if (action === "kill") {
-          const result = processManager.kill(sessionId);
+          const result = killBackgroundProcess(processManager, sessionId);
           sendProgress("process", `kill(${sessionId}): ${result}`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: result });
         } else if (action === "status") {
-          const info = processManager.status(sessionId);
+          const info = statusBackgroundProcess(processManager, sessionId);
           const result = JSON.stringify(info);
           sendProgress("process", `status(${sessionId}): ${info.status}`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: result });

@@ -155,6 +155,12 @@ export const CODE_TOOLS: ChatCompletionTool[] = [
               "If true, run the command in the background and return a session_id immediately. " +
               "Use the 'process' tool to check output, status, or kill the process.",
           },
+          persist_after_job: {
+            type: "boolean",
+            description:
+              "Only when background is true: if true, start under a gw- session id directly. " +
+              "If false, the server still survives task completion by default; running sessions move to the gateway process list.",
+          },
         },
         required: ["command"],
       },
@@ -165,7 +171,7 @@ export const CODE_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "process",
       description:
-        "Manage background processes started with run_command(background=true).",
+        "Manage background processes started with run_command(background=true), including gateway-persisted servers (gw- session ids).",
       parameters: {
         type: "object",
         properties: {
