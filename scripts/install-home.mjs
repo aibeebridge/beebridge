@@ -17,6 +17,18 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const dest = path.join(homedir(), ".beebridge");
 
 const rsyncExcludes = [
+  "/.git",
+  "/.beebridge",
+  "/gateway-token",
+  "/config.json",
+  "/.env",
+  "/.beebridge-daemon",
+  "/.beebridge-data",
+  "node_modules/.cache",
+  "apps/web/.next/cache",
+];
+
+const preservedRootEntries = new Set([
   ".git",
   ".beebridge",
   "gateway-token",
@@ -24,9 +36,7 @@ const rsyncExcludes = [
   ".env",
   ".beebridge-daemon",
   ".beebridge-data",
-  "node_modules/.cache",
-  "apps/web/.next/cache",
-];
+]);
 
 function main() {
   mkdirSync(dest, { recursive: true });
@@ -51,7 +61,11 @@ function main() {
 
 /** Skip .git and heavy caches; do not delete extra files in dest (no --delete). */
 function shouldSkipEntry(relPosix) {
-  if (relPosix === ".git" || relPosix.startsWith(".git/")) return true;
+  if (preservedRootEntries.has(relPosix)) return true;
+  if (relPosix.startsWith(".git/")) return true;
+  if (relPosix.startsWith(".beebridge/")) return true;
+  if (relPosix.startsWith(".beebridge-daemon/")) return true;
+  if (relPosix.startsWith(".beebridge-data/")) return true;
   if (relPosix === "node_modules/.cache" || relPosix.startsWith("node_modules/.cache/"))
     return true;
   if (

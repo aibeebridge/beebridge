@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 import { assertGatewayDistExists, assertWebNextBuildExists } from "../build-preflight.js";
 import { spawnNpmDaemon } from "../daemon-spawn.js";
+import { stopProcessOnPort } from "../port-utils.js";
 import { resolveBeebridgeRepoRoot } from "../repo-root.js";
 import { stopBeebridgeServers } from "./stop.js";
 
@@ -76,7 +77,8 @@ function spawnBothDaemons(options: {
 }
 
 /**
- * Start gateway + web as daemons (no stop). Foreground is not supported for both at once.
+ * Start gateway + web as daemons. If either port is already in use, stop the old process first.
+ * Foreground is not supported for both at once.
  */
 export async function startServers(options: {
   gatewayPort?: string;
@@ -97,6 +99,8 @@ export async function startServers(options: {
   }
 
   const { gatewayPort, webPort } = parsePorts(options);
+  stopProcessOnPort(gatewayPort);
+  stopProcessOnPort(webPort);
   spawnBothDaemons({ gatewayPort, webPort, dev, open: options.open });
 }
 

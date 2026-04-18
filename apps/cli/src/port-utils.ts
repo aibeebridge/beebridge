@@ -23,9 +23,7 @@ function pidsListeningOnPort(port: number): string[] {
 function signalPids(signal: "-TERM" | "-KILL", pids: string[]): void {
   for (const pid of pids) {
     const killResult = spawnSync("kill", [signal, pid], { stdio: "ignore" });
-    if (killResult.status !== 0) {
-      throw new Error(`Failed to stop process on pid=${pid} with ${signal}.`);
-    }
+    if (killResult.status !== 0) continue;
   }
 }
 

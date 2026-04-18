@@ -42,6 +42,8 @@ async function startWebUiWithPath(options: {
   const port = Number(options.port ?? process.env.PORT ?? "3000");
   const dev = options.dev === true;
 
+  stopProcessOnPort(port);
+
   if (!dev) {
     assertWebNextBuildExists(resolveBeebridgeRepoRoot());
   }

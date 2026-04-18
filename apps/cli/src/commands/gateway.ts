@@ -15,6 +15,8 @@ export async function startGatewayUi(options: {
   const port = Number(options.port ?? process.env.PORT ?? String(DEFAULT_GATEWAY_PORT));
   const dev = options.dev === true;
 
+  stopProcessOnPort(port);
+
   if (!dev) {
     assertGatewayDistExists(resolveBeebridgeRepoRoot());
   }
