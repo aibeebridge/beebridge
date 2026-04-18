@@ -6,6 +6,7 @@ coverage/
 *.log
 
 # Persistent data (contains auth tokens/secrets)
+.beebridge/
 .beebridge-data/
 .beebridge-daemon/
 
