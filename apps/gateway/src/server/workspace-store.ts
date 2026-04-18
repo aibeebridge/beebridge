@@ -143,10 +143,6 @@ export class WorkspaceStore {
 
     let districts = readJsonFile<BeeDistrict[]>(this.districtsIndex, []);
 
-    if (districts.length === 0 && latestTeamPlan?.districts) {
-      districts = latestTeamPlan.districts;
-    }
-
     mark = workspaceLoadPerf("json: districts-index", t0, mark);
 
     const tasks: BeeTask[] = [];

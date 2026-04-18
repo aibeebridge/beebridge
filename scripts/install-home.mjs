@@ -18,6 +18,7 @@ const dest = path.join(homedir(), ".beebridge");
 
 const rsyncExcludes = [
   ".git",
+  ".beebridge",
   "gateway-token",
   "config.json",
   ".env",
