@@ -6,6 +6,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  type Attachment,
   type Message,
   Partials,
 } from "discord.js";
@@ -17,6 +18,59 @@ const DISCORD_MESSAGE_MAX = 1990;
 const HISTORY_MAX_TURNS = 20;
 /** Default min ms between handled messages per flower+channel when config omits discordCooldownMs. */
 const DEFAULT_DISCORD_COOLDOWN_MS = 1200;
+const DISCORD_TEXT_ATTACHMENT_MAX_BYTES = 64 * 1024;
+const DISCORD_TEXT_ATTACHMENT_TOTAL_MAX_BYTES = 192 * 1024;
+const DISCORD_TEXT_ATTACHMENT_MAX_CHARS = 8_000;
+const DISCORD_TEXT_ATTACHMENT_TOTAL_MAX_CHARS = 16_000;
+const DISCORD_TEXT_ATTACHMENT_CONTENT_TYPES = new Set([
+  "application/json",
+  "application/ld+json",
+  "application/xml",
+  "application/x-sh",
+  "application/x-httpd-php",
+  "application/javascript",
+  "application/typescript",
+  "application/sql",
+  "application/toml",
+  "application/x-yaml",
+]);
+const DISCORD_TEXT_ATTACHMENT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonl",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".conf",
+  ".csv",
+  ".tsv",
+  ".log",
+  ".xml",
+  ".html",
+  ".css",
+  ".js",
+  ".cjs",
+  ".mjs",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".swift",
+  ".php",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".sql",
+]);
 
 function discordFlowerDebugEnabled(): boolean {
   const v = process.env.DISCORD_FLOWER_DEBUG ?? process.env.BEEBRIDGE_DISCORD_DEBUG ?? "";
@@ -32,6 +86,89 @@ function chunkDiscordText(text: string): string[] {
     out.push(t.slice(i, i + DISCORD_MESSAGE_MAX));
   }
   return out;
+}
+
+function normalizeDiscordAttachmentText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").replace(/\u0000/g, "").trim();
+}
+
+export function isDiscordTextAttachment(att: Pick<Attachment, "name" | "contentType">): boolean {
+  const contentType = att.contentType?.toLowerCase().trim() ?? "";
+  if (contentType.startsWith("text/")) return true;
+  if (DISCORD_TEXT_ATTACHMENT_CONTENT_TYPES.has(contentType)) return true;
+  const name = att.name?.toLowerCase().trim() ?? "";
+  for (const ext of DISCORD_TEXT_ATTACHMENT_EXTENSIONS) {
+    if (name.endsWith(ext)) return true;
+  }
+  return false;
+}
+
+type DiscordAttachmentPromptOptions = {
+  fetchImpl?: typeof fetch;
+  onSkip?: (detail: string) => void;
+};
+
+export async function buildDiscordTextAttachmentPrompt(
+  attachments: Iterable<Pick<Attachment, "name" | "contentType" | "url" | "size">>,
+  options: DiscordAttachmentPromptOptions = {},
+): Promise<string> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const blocks: string[] = [];
+  let totalBytes = 0;
+  let totalChars = 0;
+
+  for (const att of attachments) {
+    if (!att.url || !isDiscordTextAttachment(att)) continue;
+    const displayName = att.name?.trim() || "attachment.txt";
+    const declaredSize = typeof att.size === "number" && Number.isFinite(att.size) ? Math.max(0, att.size) : undefined;
+    if (declaredSize !== undefined && declaredSize > DISCORD_TEXT_ATTACHMENT_MAX_BYTES) {
+      options.onSkip?.(`skip attachment ${displayName}: too large (${declaredSize} bytes)`);
+      continue;
+    }
+    if (declaredSize !== undefined && totalBytes + declaredSize > DISCORD_TEXT_ATTACHMENT_TOTAL_MAX_BYTES) {
+      options.onSkip?.(`skip attachment ${displayName}: total attachment budget exceeded`);
+      continue;
+    }
+
+    try {
+      const resp = await fetchImpl(att.url);
+      if (!resp.ok) {
+        options.onSkip?.(`skip attachment ${displayName}: fetch failed (${resp.status})`);
+        continue;
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.byteLength > DISCORD_TEXT_ATTACHMENT_MAX_BYTES) {
+        options.onSkip?.(`skip attachment ${displayName}: too large after download (${buf.byteLength} bytes)`);
+        continue;
+      }
+      if (totalBytes + buf.byteLength > DISCORD_TEXT_ATTACHMENT_TOTAL_MAX_BYTES) {
+        options.onSkip?.(`skip attachment ${displayName}: total attachment budget exceeded`);
+        continue;
+      }
+
+      let body = normalizeDiscordAttachmentText(buf.toString("utf8"));
+      if (!body) continue;
+      if (body.length > DISCORD_TEXT_ATTACHMENT_MAX_CHARS) {
+        body = `${body.slice(0, DISCORD_TEXT_ATTACHMENT_MAX_CHARS)}\n[... attachment truncated]`;
+      }
+      const remainingChars = DISCORD_TEXT_ATTACHMENT_TOTAL_MAX_CHARS - totalChars;
+      if (remainingChars <= 0) {
+        options.onSkip?.(`skip attachment ${displayName}: total attachment text budget exceeded`);
+        continue;
+      }
+      if (body.length > remainingChars) {
+        body = `${body.slice(0, remainingChars)}\n[... attachment truncated]`;
+      }
+
+      blocks.push(`=== Discord attachment: ${displayName} ===\n${body}\n=== End attachment ===`);
+      totalBytes += buf.byteLength;
+      totalChars += body.length;
+    } catch (e) {
+      options.onSkip?.(`skip attachment ${displayName}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return blocks.join("\n\n");
 }
 
 export type DiscordFlowerManagerParams = {
@@ -372,14 +509,20 @@ export class DiscordFlowerManager {
         imageUrls.push(att.url);
       }
     }
+    const attachmentPrompt = await buildDiscordTextAttachmentPrompt(msg.attachments.values(), {
+      onSkip: (detail) => {
+        this.log("DISCORD", `${detail} flower=${flowerId} channel=${msg.channelId}`);
+      },
+    });
+    const userMessage = [text, attachmentPrompt].filter(Boolean).join("\n\n").trim();
 
-    if (!text && imageUrls.length === 0) {
+    if (!userMessage && imageUrls.length === 0) {
       const hkHint = this.historyKey(flowerId, msg.channelId);
       if (!this.loggedEmptyTextHint.has(hkHint)) {
         this.loggedEmptyTextHint.add(hkHint);
         this.log(
           "DISCORD",
-          `skip: empty message text in allowlisted channel ${msg.channelId} (sticker/image-only?) — if this is a guild channel, enable Message Content Intent on the bot in Discord Developer Portal`,
+          `skip: no usable text/image payload in allowlisted channel ${msg.channelId} (sticker-only or unsupported attachment?) — if this is a guild channel, enable Message Content Intent on the bot in Discord Developer Portal`,
         );
       }
       return;
@@ -420,7 +563,7 @@ export class DiscordFlowerManager {
     const chatActionToolsEnabled = config?.discordChatToolsEnabled !== false;
 
     const chatResult = await runChatMessage({
-      userMessage: text || "(image attached)",
+      userMessage: userMessage || "(image attached)",
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
       history: prior,
       deps: this.chatDeps,
@@ -481,7 +624,7 @@ export class DiscordFlowerManager {
       return;
     }
 
-    prior = [...prior, { role: "user", content: text }, { role: "assistant", content: reply }];
+    prior = [...prior, { role: "user", content: userMessage || "(image attached)" }, { role: "assistant", content: reply }];
     while (prior.length > HISTORY_MAX_TURNS * 2) {
       prior = prior.slice(-(HISTORY_MAX_TURNS * 2));
     }
