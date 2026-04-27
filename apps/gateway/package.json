@@ -8,7 +8,7 @@
     "start": "NODE_EXTRA_CA_CERTS=../../.ca-certs.pem node dist/server/index.js",
     "dev": "NODE_EXTRA_CA_CERTS=../../.ca-certs.pem tsx src/server/index.ts",
     "dev:perf": "NODE_EXTRA_CA_CERTS=../../.ca-certs.pem BEEBRIDGE_GATEWAY_PERF_LOG=1 tsx src/server/index.ts",
-    "test": "node --import tsx --test src/server/chat-route.test.ts"
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@beebridge/shared": "0.1.0",

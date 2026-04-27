@@ -547,6 +547,11 @@ function requestSecret(req: express.Request): string | undefined {
   return auth.startsWith("Bearer ") ? auth.slice(7) : auth;
 }
 
+function maskSecret(secret: string): string {
+  if (secret.length <= 8) return "<redacted>";
+  return `${secret.slice(0, 4)}...${secret.slice(-4)}`;
+}
+
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
   const id = `${req.ip}:${req.path}`;
   if (!limiter.consume(id)) {
@@ -3762,7 +3767,7 @@ const server = app.listen(PORT, () => {
   log("SERVER", `beebridge gateway listening on :${PORT}`);
   log("SERVER", `auth mode: ${authConfig.mode}`);
   if (authConfig.mode === "token" && authConfig.token) {
-    log("SERVER", `gateway token: ${authConfig.token}`);
+    log("SERVER", `gateway token: ${maskSecret(authConfig.token)}`);
     log("SERVER", `  file: ${BEEGATEWAY_TOKEN_FILE}`);
     log("SERVER", `  paste this into the Chrome extension popup and Settings → Connection if needed.`);
   }

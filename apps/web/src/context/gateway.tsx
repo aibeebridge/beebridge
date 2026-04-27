@@ -13,15 +13,6 @@ export const DEFAULT_GATEWAY_FETCH_TIMEOUT_MS: number = (() => {
 /** Shorter timeout for /health probes so the UI does not pile up hung requests. */
 export const GATEWAY_HEALTH_TIMEOUT_MS = 8000;
 
-/**
- * Bearer token for gateway HTTP/WebSocket (must match gateway `GATEWAY_TOKEN`).
- * Set at build time via `NEXT_PUBLIC_GATEWAY_TOKEN`; empty means the user must enter the token in Settings.
- */
-export const DEFAULT_PUBLIC_GATEWAY_TOKEN =
-  typeof process !== "undefined" && typeof process.env.NEXT_PUBLIC_GATEWAY_TOKEN === "string"
-    ? process.env.NEXT_PUBLIC_GATEWAY_TOKEN
-    : "";
-
 const LS_GATEWAY_URL_KEY = "beebridge.gateway.url";
 const LS_GATEWAY_TOKEN_KEY = "beebridge.gateway.token";
 
@@ -188,14 +179,7 @@ interface GatewayContextValue {
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
-export function GatewayProvider({
-  children,
-  initialToken,
-}: {
-  children: ReactNode;
-  /** From server: persisted file or omitted when using NEXT_PUBLIC_GATEWAY_TOKEN only. */
-  initialToken?: string;
-}) {
+export function GatewayProvider({ children }: { children: ReactNode }) {
   /** Empty = same-origin `/api`, `/health`, `/ws` via Next rewrites → gateway (see next.config.ts). */
   const [url, setUrl] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -214,7 +198,7 @@ export function GatewayProvider({
         // ignore
       }
     }
-    return DEFAULT_PUBLIC_GATEWAY_TOKEN || initialToken || "";
+    return "";
   });
   const [connected, setConnected] = useState(false);
 
@@ -240,19 +224,6 @@ export function GatewayProvider({
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/gateway-token")
-      .then((r) => r.json())
-      .then((data: { token?: string }) => {
-        if (!cancelled && !token && data?.token && data.token !== token) {
-          setToken(data.token);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    let cancelled = false;
 
     async function probe() {
       try {
@@ -266,13 +237,6 @@ export function GatewayProvider({
         let body: { tokenValid?: boolean } = {};
         try { body = await r.json(); } catch { /* ignore */ }
         if (body.tokenValid === false) {
-          try {
-            const fresh = await fetch("/api/gateway-token").then((t) => t.json());
-            if (!cancelled && fresh?.token && fresh.token !== token) {
-              setToken(fresh.token);
-              return;
-            }
-          } catch { /* ignore */ }
           setConnected(false);
           return;
         }

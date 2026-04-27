@@ -1,14 +1,18 @@
 import type { NextConfig } from "next";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Proxy API, health, and WebSocket to the real gateway so the browser can use a single origin
  * (same port as the Next app). SSH port-forward only that port; no separate WS port.
  */
 const gatewayOrigin = process.env.BEEBRIDGE_GATEWAY_ORIGIN ?? "http://127.0.0.1:4321";
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   devIndicators: false,
+  outputFileTracingRoot: repoRoot,
   experimental: {
     // Next 15.5+ segment explorer can trigger webpack HMR/runtime errors
     // (e.g. "__webpack_modules__[moduleId] is not a function") in some setups.

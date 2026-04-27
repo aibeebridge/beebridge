@@ -4,15 +4,9 @@ import type { ReactNode } from "react";
 import { GatewayProvider } from "../context/gateway";
 import { SidebarLayoutProvider } from "../context/sidebar-layout";
 
-export function ProvidersClient({
-  children,
-  initialGatewayToken,
-}: {
-  children: ReactNode;
-  initialGatewayToken?: string;
-}) {
+export function ProvidersClient({ children }: { children: ReactNode }) {
   return (
-    <GatewayProvider initialToken={initialGatewayToken}>
+    <GatewayProvider>
       <SidebarLayoutProvider>{children}</SidebarLayoutProvider>
     </GatewayProvider>
   );
