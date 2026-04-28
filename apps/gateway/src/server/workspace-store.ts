@@ -27,6 +27,15 @@ export type WorkspaceSnapshot = {
   auditEvents: AuditEvent[];
 };
 
+export type BridgeTemplateRecord = {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+  payload: unknown;
+};
+
 type DistrictMeta = {
   district: BeeDistrict;
   bees: BeePersona[];
@@ -92,6 +101,7 @@ export class WorkspaceStore {
   private readonly bridgesFile: string;
   private readonly bridgeGraphMetaFile: string;
   private readonly pipelineRunsFile: string;
+  private readonly bridgeTemplatesFile: string;
   private readonly schedulesFile: string;
   private readonly conversationsFile: string;
   private readonly conversationArchivesFile: string;
@@ -105,6 +115,7 @@ export class WorkspaceStore {
     this.bridgesFile = path.join(workspaceRoot, "bridges", "bridges.json");
     this.bridgeGraphMetaFile = path.join(workspaceRoot, "bridges", "bridge-graph-meta.json");
     this.pipelineRunsFile = path.join(workspaceRoot, "bridges", "pipeline-runs.json");
+    this.bridgeTemplatesFile = path.join(workspaceRoot, "bridges", "templates.json");
     this.schedulesFile = path.join(workspaceRoot, "jobs", "schedules.json");
     this.conversationsFile = path.join(workspaceRoot, "jobs", "conversations.json");
     this.conversationArchivesFile = path.join(workspaceRoot, "jobs", "conversation-archives.json");
@@ -266,5 +277,14 @@ export class WorkspaceStore {
     const max = 200;
     if (list.length > max) list.length = max;
     writeJsonFile(this.pipelineRunsFile, list);
+  }
+
+  loadBridgeTemplates(): BridgeTemplateRecord[] {
+    const raw = readJsonFile<BridgeTemplateRecord[]>(this.bridgeTemplatesFile, []);
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  saveBridgeTemplates(templates: BridgeTemplateRecord[]): void {
+    writeJsonFile(this.bridgeTemplatesFile, templates);
   }
 }

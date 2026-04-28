@@ -29,6 +29,7 @@ import {
   type BridgeGraphMeta,
   type PipelineRunRecord,
   type PmAuthProfile,
+  type TaskConversation,
   newBeeId,
 } from "@beebridge/core";
 import type { WebSocket as WsSocket } from "ws";
@@ -547,6 +548,16 @@ function requestSecret(req: express.Request): string | undefined {
   return auth.startsWith("Bearer ") ? auth.slice(7) : auth;
 }
 
+function authStatusForSecret(supplied: string | undefined) {
+  const authenticated = authorizeSecret(authConfig, supplied);
+  return {
+    authRequired: authConfig.mode !== "none",
+    authenticated,
+    authMode: authConfig.mode,
+    ...(authConfig.mode !== "none" ? { tokenValid: authenticated } : {}),
+  };
+}
+
 function maskSecret(secret: string): string {
   if (secret.length <= 8) return "<redacted>";
   return `${secret.slice(0, 4)}...${secret.slice(-4)}`;
@@ -617,11 +628,10 @@ a{color:#2563eb}</style></head><body>
 
 app.get("/health", (req, res) => {
   const supplied = requestSecret(req);
-  const authed = supplied ? authorizeSecret(authConfig, supplied) : undefined;
   res.json({
     status: "ok",
-    authMode: authConfig.mode,
-    ...(authed === false ? { tokenValid: false } : {}),
+    reachable: true,
+    ...authStatusForSecret(supplied),
   });
 });
 
@@ -1997,31 +2007,44 @@ app.put("/api/settings/model-policy", requireAuth, (req, res) => {
   res.json({ modelPolicy: updated });
 });
 
-// ─── Retry failed task ───
-app.post("/api/jobs/:jobId/retry", requireAuth, asyncHandler(async (req, res) => {
-  const taskId = req.params.jobId;
+type FailureKind =
+  | "auth"
+  | "flower_offline"
+  | "cdp_unavailable"
+  | "timeout"
+  | "model_error"
+  | "tool_error"
+  | "unknown";
+
+function classifyFailureText(text: string): FailureKind {
+  const s = text.toLowerCase();
+  if (/unauthorized|401|403|auth|token|credential|api key/.test(s)) return "auth";
+  if (/flower.*(offline|not connected)|no connected flower|websocket.*reject/.test(s)) return "flower_offline";
+  if (/cdp relay|debugger|devtools|chrome relay|not attached/.test(s)) return "cdp_unavailable";
+  if (/timeout|timed out|abort/.test(s)) return "timeout";
+  if (/model|llm|openai|anthropic|gemini|provider/.test(s)) return "model_error";
+  if (/tool|command|selector|click|fill|navigate|snapshot/.test(s)) return "tool_error";
+  return "unknown";
+}
+
+function classifyJobFailure(taskId: string): { kind: FailureKind; message: string } {
   const conv = jobStore.get(taskId);
-  if (!conv || conv.status !== "failed") {
-    res.status(400).json({ error: conv ? "task_not_failed" : "task_not_found" });
-    return;
-  }
+  const message = conv?.entries.slice().reverse().find((e) => e.action === "error")?.content ?? "";
+  return { kind: classifyFailureText(message), message };
+}
 
-  const task = allTasks.get(taskId);
-  if (!task) {
-    res.status(404).json({ error: "task_data_not_found" });
-    return;
-  }
-
-  const sched = taskSchedules.get(taskId);
-  if (sched) {
-    // Manual restart means "start over": clear accumulated failure/retry count.
-    sched.retryCount = 0;
-    sched.lastRunAt = new Date().toISOString();
-  }
-
-  jobStore.reset(taskId);
-  log("RETRY", `restarting task ${taskId} (retry counter reset)`);
-  auditLog.record({ type: "bee.task.retried", payload: { taskId, retryCount: sched?.retryCount ?? 0, reset: true } });
+async function rerunTaskAndRespond(
+  res: express.Response,
+  task: BeeTask,
+  mode: "retry" | "resume",
+  sched?: TaskSchedule,
+): Promise<void> {
+  const taskId = task.id;
+  log(mode === "retry" ? "RETRY" : "RESUME", `${mode === "retry" ? "restarting" : "resuming"} task ${taskId}`);
+  auditLog.record({
+    type: mode === "retry" ? "bee.task.retried" : "bee.task.resumed",
+    payload: { taskId, retryCount: sched?.retryCount ?? 0, reset: mode === "retry" },
+  });
 
   broadcastToWeb({ type: "queue.run.start", total: 1, startDistrictId: bridgeGraphMeta.startDistrictId });
   const completedRetry: CompletedTaskInfo[] = [];
@@ -2046,7 +2069,60 @@ app.post("/api/jobs/:jobId/retry", requireAuth, asyncHandler(async (req, res) =>
     },
   });
   broadcastToWeb({ type: "queue.task.running", districtId: null, taskId: null, taskTitle: null });
-  res.json({ retried: true, taskId, retryCount: sched?.retryCount ?? 0, result, reset: true });
+  res.json({
+    [mode === "retry" ? "retried" : "resumed"]: true,
+    taskId,
+    retryCount: sched?.retryCount ?? 0,
+    result,
+    reset: mode === "retry",
+  });
+}
+
+// ─── Retry failed task ───
+app.post("/api/jobs/:jobId/retry", requireAuth, asyncHandler(async (req, res) => {
+  const taskId = req.params.jobId;
+  const conv = jobStore.get(taskId);
+  if (!conv || conv.status !== "failed") {
+    res.status(400).json({ error: conv ? "task_not_failed" : "task_not_found", failure: classifyJobFailure(taskId) });
+    return;
+  }
+
+  const task = allTasks.get(taskId);
+  if (!task) {
+    res.status(404).json({ error: "task_data_not_found" });
+    return;
+  }
+
+  const sched = taskSchedules.get(taskId);
+  if (sched) {
+    // Manual restart means "start over": clear accumulated failure/retry count.
+    sched.retryCount = 0;
+    sched.lastRunAt = new Date().toISOString();
+  }
+
+  jobStore.reset(taskId);
+  await rerunTaskAndRespond(res, task, "retry", sched);
+}));
+
+app.post("/api/jobs/:jobId/resume", requireAuth, asyncHandler(async (req, res) => {
+  const taskId = req.params.jobId;
+  const conv = jobStore.get(taskId);
+  if (!conv || conv.status !== "failed") {
+    res.status(conv ? 409 : 404).json({ error: conv ? "task_not_failed" : "task_not_found", failure: classifyJobFailure(taskId) });
+    return;
+  }
+
+  const task = allTasks.get(taskId);
+  if (!task) {
+    res.status(404).json({ error: "task_data_not_found", failure: classifyJobFailure(taskId) });
+    return;
+  }
+
+  const sched = taskSchedules.get(taskId);
+  if (sched) {
+    sched.lastRunAt = new Date().toISOString();
+  }
+  await rerunTaskAndRespond(res, task, "resume", sched);
 }));
 
 // ─── Task update ───
@@ -2265,6 +2341,87 @@ app.get("/api/jobs/conversations", requireAuth, (_req, res) => {
   res.json({ conversations: all });
 });
 
+function wordsForSuggestion(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9가-힣\s-]/g, " ")
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 2),
+  );
+}
+
+function lastUsefulConversationText(conv: ConversationEntry[]): string {
+  return conv.slice().reverse().find((e) => e.action === "done" || e.role === "flower" || e.role === "system")?.content ?? "";
+}
+
+app.get("/api/context/suggestions", requireAuth, (req, res) => {
+  const districtId = typeof req.query.districtId === "string" ? req.query.districtId.trim() : "";
+  const taskId = typeof req.query.taskId === "string" ? req.query.taskId.trim() : "";
+  const limitRaw = Number(req.query.limit ?? 8);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.floor(limitRaw))) : 8;
+  const seedTask = taskId ? allTasks.get(taskId) : undefined;
+  const seedWords = wordsForSuggestion(`${seedTask?.title ?? ""} ${seedTask?.description ?? ""}`);
+  const upstream = districtId && allDistricts.has(districtId) ? upstreamDistrictsOneWay(districtId, districtBridges.values()) : new Set<string>();
+
+  const suggestions: {
+    sourceType: "conversation" | "pipeline";
+    sourceId: string;
+    taskId?: string;
+    districtId?: string;
+    title: string;
+    preview: string;
+    score: number;
+    createdAt: string;
+  }[] = [];
+
+  const addConversation = (conv: TaskConversation, archived = false) => {
+    if (conv.status !== "done" || conv.taskId === taskId) return;
+    const task = allTasks.get(conv.taskId);
+    const output = lastUsefulConversationText(conv.entries).trim();
+    if (!output) return;
+    let score = archived ? 5 : 10;
+    if (districtId && task?.districtId === districtId) score += 50;
+    if (task?.districtId && upstream.has(task.districtId)) score += 35;
+    const taskWords = wordsForSuggestion(`${task?.title ?? ""} ${task?.description ?? ""}`);
+    for (const w of seedWords) if (taskWords.has(w)) score += 3;
+    suggestions.push({
+      sourceType: "conversation",
+      sourceId: conv.sessionId ?? conv.jobId,
+      taskId: conv.taskId,
+      districtId: task?.districtId,
+      title: task?.title ?? conv.taskId,
+      preview: output.slice(0, 500),
+      score,
+      createdAt: conv.finishedAt ?? conv.startedAt,
+    });
+  };
+
+  for (const conv of jobStore.listAll()) addConversation(conv);
+  for (const task of allTasks.values()) {
+    for (const conv of jobStore.listHistory(task.id)) addConversation(conv, true);
+  }
+
+  for (const run of workspaceStore.loadPipelineRuns()) {
+    let score = run.startDistrictId === districtId ? 45 : 12;
+    if (upstream.has(run.startDistrictId)) score += 25;
+    const title = `Pipeline ${run.startDistrictId}`;
+    suggestions.push({
+      sourceType: "pipeline",
+      sourceId: run.id,
+      districtId: run.startDistrictId,
+      title,
+      preview: run.summary.slice(0, 500),
+      score,
+      createdAt: run.finishedAt,
+    });
+  }
+
+  suggestions.sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt));
+  res.json({ suggestions: suggestions.slice(0, limit) });
+});
+
 app.get("/api/team", requireAuth, (_req, res) => {
   res.json({ teamPlan: latestTeamPlan });
 });
@@ -2317,12 +2474,18 @@ type BridgeSettingsImportPayload = {
   bridges: Array<Record<string, unknown>>;
 };
 
+type BridgeTemplatePayload = Omit<BridgeSettingsImportPayload, "format"> & {
+  format: "beebridge.bridge-template.v1";
+  templateName?: string;
+  templateDescription?: string;
+};
+
 function parseBridgeSettingsImportPayload(raw: unknown): BridgeSettingsImportPayload {
   if (!raw || typeof raw !== "object") {
     throw new Error("payload must be an object");
   }
   const rec = raw as Record<string, unknown>;
-  if (rec.format !== "beebridge.bridge-settings.v1") {
+  if (rec.format !== "beebridge.bridge-settings.v1" && rec.format !== "beebridge.bridge-template.v1") {
     throw new Error("unsupported format");
   }
   const districts = Array.isArray(rec.districts) ? rec.districts : [];
@@ -2346,6 +2509,109 @@ function parseBridgeSettingsImportPayload(raw: unknown): BridgeSettingsImportPay
           : [],
       })),
     bridges: bridges.filter((b): b is Record<string, unknown> => Boolean(b && typeof b === "object")),
+  };
+}
+
+function sanitizeTemplatePayload(raw: unknown): BridgeTemplatePayload {
+  const parsed = parseBridgeSettingsImportPayload(raw);
+  const clone = JSON.parse(JSON.stringify(parsed)) as BridgeTemplatePayload;
+  clone.format = "beebridge.bridge-template.v1";
+  for (const row of clone.districts) {
+    delete (row.district as { codeProjectPath?: unknown }).codeProjectPath;
+    const waggle = row.district.waggle as Record<string, unknown> | undefined;
+    if (waggle && typeof waggle === "object") delete waggle.apiKey;
+    for (const task of row.tasks) {
+      task.status = "waiting";
+      if (task.schedule && typeof task.schedule === "object") {
+        (task.schedule as Record<string, unknown>).retryCount = 0;
+        delete (task.schedule as Record<string, unknown>).lastRunAt;
+        delete (task.schedule as Record<string, unknown>).nextRunAt;
+      }
+    }
+  }
+  return clone;
+}
+
+function remapTemplatePayloadForApply(raw: unknown): BridgeSettingsImportPayload {
+  const parsed = parseBridgeSettingsImportPayload(raw);
+  const districtMap = new Map<string, string>();
+  const beeMap = new Map<string, string>();
+  const taskMap = new Map<string, string>();
+  const cityId = latestTeamPlan?.id || `city-${randomUUID().slice(0, 8)}`;
+
+  for (const row of parsed.districts) {
+    const oldId = typeof row.district.id === "string" ? row.district.id : "";
+    if (oldId) districtMap.set(oldId, `district-${randomUUID().slice(0, 8)}`);
+    for (const b of row.bees) {
+      const oldBeeId = typeof b.id === "string" ? b.id : "";
+      if (oldBeeId) beeMap.set(oldBeeId, newBeeId());
+    }
+    for (const t of row.tasks) {
+      const oldTaskId = typeof t.id === "string" ? t.id : "";
+      if (oldTaskId) taskMap.set(oldTaskId, `task-${randomUUID().slice(0, 8)}`);
+    }
+  }
+
+  const districts = parsed.districts.map((row) => {
+    const oldDistrictId = String(row.district.id ?? "");
+    const districtId = districtMap.get(oldDistrictId) ?? `district-${randomUUID().slice(0, 8)}`;
+    const bees = row.bees.map((b) => {
+      const oldBeeId = String(b.id ?? "");
+      const next: Record<string, unknown> = { ...b, id: beeMap.get(oldBeeId) ?? newBeeId() };
+      if (typeof next.scopedTaskId === "string") next.scopedTaskId = taskMap.get(next.scopedTaskId) ?? next.scopedTaskId;
+      if (typeof next.parentBeeId === "string") next.parentBeeId = beeMap.get(next.parentBeeId) ?? next.parentBeeId;
+      return next;
+    });
+    const tasks = row.tasks.map((t) => {
+      const oldTaskId = String(t.id ?? "");
+      const personaId = typeof t.personaId === "string" ? beeMap.get(t.personaId) ?? t.personaId : undefined;
+      const bee = typeof t.bee === "string" ? beeMap.get(t.bee) ?? t.bee : t.bee;
+      const schedule: Record<string, unknown> | undefined =
+        t.schedule && typeof t.schedule === "object" ? { ...(t.schedule as Record<string, unknown>), retryCount: 0 } : undefined;
+      if (schedule) {
+        delete schedule.lastRunAt;
+        delete schedule.nextRunAt;
+      }
+      return {
+        ...t,
+        id: taskMap.get(oldTaskId) ?? `task-${randomUUID().slice(0, 8)}`,
+        districtId,
+        cityId,
+        bee,
+        personaId,
+        status: "waiting",
+        dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn.map(String).map((id) => taskMap.get(id)).filter(Boolean) : undefined,
+        schedule,
+      };
+    });
+    return {
+      district: {
+        ...row.district,
+        id: districtId,
+        cityId,
+        title: `${String(row.district.title ?? "District")} copy`,
+        beeRosterIds: Array.isArray(row.district.beeRosterIds)
+          ? row.district.beeRosterIds.map(String).map((id) => beeMap.get(id)).filter(Boolean)
+          : undefined,
+      },
+      bees,
+      tasks,
+    };
+  });
+
+  const bridges = parsed.bridges.map((b) => ({
+    ...b,
+    id: `bridge-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    fromDistrictId: districtMap.get(String(b.fromDistrictId ?? "")) ?? "",
+    toDistrictId: districtMap.get(String(b.toDistrictId ?? "")) ?? "",
+    createdAt: new Date().toISOString(),
+  }));
+
+  return {
+    format: "beebridge.bridge-settings.v1",
+    startDistrictId: parsed.startDistrictId ? districtMap.get(parsed.startDistrictId) ?? null : null,
+    districts,
+    bridges,
   };
 }
 
@@ -2495,6 +2761,113 @@ function normalizeImportedBridge(
       typeof raw.createdAt === "string" && raw.createdAt.trim()
         ? raw.createdAt.trim()
         : new Date().toISOString(),
+  };
+}
+
+function applyBridgeSettingsPayload(payload: BridgeSettingsImportPayload) {
+  if (!latestTeamPlan) {
+    latestTeamPlan = {
+      id: `city-${randomUUID().slice(0, 8)}`,
+      goal: "",
+      bees: [],
+      districts: [...allDistricts.values()],
+      tasks: [...allTasks.values()],
+    };
+  }
+
+  const cityIdFallback = latestTeamPlan.id || `city-${randomUUID().slice(0, 8)}`;
+  const importedDistrictIds = new Set<string>();
+  const importedTaskIds = new Set<string>();
+  const importedBeeIds = new Set<string>();
+  let importedBridgeCount = 0;
+
+  for (const row of payload.districts) {
+    const district = normalizeImportedDistrict(row.district, cityIdFallback);
+    if (!district) continue;
+    importedDistrictIds.add(district.id);
+    allDistricts.set(district.id, district);
+
+    const bees: BeePersona[] = [];
+    for (const bRow of row.bees) {
+      const bee = normalizeImportedBee(bRow);
+      if (!bee) continue;
+      bees.push(bee);
+      importedBeeIds.add(bee.id);
+    }
+
+    const tasks: BeeTask[] = [];
+    for (const tRow of row.tasks) {
+      const task = normalizeImportedTask(tRow, district.id, district.cityId || cityIdFallback);
+      if (!task) continue;
+      tasks.push(task);
+      importedTaskIds.add(task.id);
+      allTasks.set(task.id, task);
+      if (task.schedule && typeof task.schedule === "object") {
+        taskSchedules.set(task.id, task.schedule as TaskSchedule);
+      } else {
+        taskSchedules.delete(task.id);
+      }
+      if (task.requiresApproval && task.status !== "done") {
+        approvalGate.register(task);
+      } else {
+        approvalGate.forget(task.id);
+      }
+    }
+
+    const beeById = new Map((latestTeamPlan.bees ?? []).map((b) => [b.id, b] as const));
+    for (const b of bees) beeById.set(b.id, b);
+    latestTeamPlan.bees = [...beeById.values()];
+
+    const taskById = new Map((latestTeamPlan.tasks ?? []).map((t) => [t.id, t] as const));
+    for (const t of tasks) taskById.set(t.id, t);
+    latestTeamPlan.tasks = [...taskById.values()];
+  }
+
+  for (const taskId of importedTaskIds) {
+    const task = allTasks.get(taskId);
+    if (!task) continue;
+    task.dependsOn = Array.isArray(task.dependsOn)
+      ? task.dependsOn.map(String).filter((id) => id && allTasks.has(id))
+      : undefined;
+  }
+
+  for (const bRow of payload.bridges) {
+    const bridge = normalizeImportedBridge(bRow);
+    if (!bridge) continue;
+    if (!allDistricts.has(bridge.fromDistrictId) || !allDistricts.has(bridge.toDistrictId)) continue;
+    districtBridges.set(bridge.id, bridge);
+    importedBridgeCount++;
+  }
+
+  for (const districtId of importedDistrictIds) {
+    const district = allDistricts.get(districtId);
+    if (!district) continue;
+    district.beeRosterIds = recomputeDistrictBeeRosterIds(districtId);
+    allDistricts.set(districtId, district);
+  }
+
+  const districtById = new Map((latestTeamPlan.districts ?? []).map((d) => [d.id, d] as const));
+  for (const d of allDistricts.values()) districtById.set(d.id, d);
+  latestTeamPlan.districts = [...districtById.values()];
+
+  if (payload.startDistrictId && allDistricts.has(payload.startDistrictId)) {
+    bridgeGraphMeta = { startDistrictId: payload.startDistrictId };
+  }
+
+  syncGraph();
+  persistWorkspace();
+  broadcastToWeb({ type: "districts.updated" });
+  broadcastToWeb({ type: "bridge-graph.updated", startDistrictId: bridgeGraphMeta.startDistrictId });
+
+  return {
+    districts: importedDistrictIds.size,
+    bees: importedBeeIds.size,
+    tasks: importedTaskIds.size,
+    bridges: importedBridgeCount,
+    startDistrictId: bridgeGraphMeta.startDistrictId,
+    districtIds: [...importedDistrictIds],
+    taskIds: [...importedTaskIds],
+    beeIds: [...importedBeeIds],
   };
 }
 
@@ -2650,6 +3023,52 @@ app.get("/api/flowers/connected", requireAuth, (_req, res) => {
   res.json({ flowers, count: flowers.length });
 });
 
+app.get("/api/diagnostics/runtime", requireAuth, (req, res) => {
+  const discordMgr = discordFlowerManagerRef.current;
+  const configuredFlowers = flowerConfigStore.getAll().map((f) => {
+    const connected =
+      f.type === "chrome_extension"
+        ? [...connectedFlowers.values()].some((ws) => ws.readyState === 1)
+        : f.type === "discord_bot"
+          ? (discordMgr?.isFlowerConnected(f.id) ?? false)
+          : false;
+    return {
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      enabled: f.enabled,
+      connected,
+      lastError: f.type === "discord_bot" ? discordMgr?.getLastError(f.id) : undefined,
+    };
+  });
+  const activeJobs = jobStore.listAll().filter((c) => c.status === "running");
+  res.json({
+    gateway: {
+      status: "ok",
+      port: PORT,
+      cdpRelayPort: CDP_RELAY_PORT,
+      ...authStatusForSecret(requestSecret(req)),
+    },
+    flowers: {
+      connectedCount: configuredFlowers.filter((f) => f.connected).length,
+      configured: configuredFlowers,
+      liveWebSocketIds: [...connectedFlowers.keys()],
+    },
+    cdpRelay: {
+      connected: cdpRelay.isExtensionConnected(),
+      attachedTabId: cdpRelay.getAttachedTabId(),
+    },
+    discord: {
+      summary: discordMgr?.getRuntimeSummary() ?? "discord_flower_bots_ready: 0",
+    },
+    jobs: {
+      activeCount: activeJobs.length,
+      active: activeJobs.map((c) => ({ taskId: c.taskId, beeId: c.beeId, startedAt: c.startedAt })),
+      pendingApprovals: approvalGate.listPending().length,
+    },
+  });
+});
+
 // ─── District Bridges ───
 app.get("/api/bridges", requireAuth, (_req, res) => {
   const bridges = [...districtBridges.values()];
@@ -2722,6 +3141,75 @@ app.get("/api/bridge-graph", requireAuth, (_req, res) => {
       title: d.title,
       bridgeLayout: d.bridgeLayout,
     })),
+  });
+});
+
+app.get("/api/bridge-templates", requireAuth, (_req, res) => {
+  const templates = workspaceStore.loadBridgeTemplates().map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    districtCount:
+      t.payload && typeof t.payload === "object" && Array.isArray((t.payload as { districts?: unknown }).districts)
+        ? ((t.payload as { districts: unknown[] }).districts.length)
+        : 0,
+    bridgeCount:
+      t.payload && typeof t.payload === "object" && Array.isArray((t.payload as { bridges?: unknown }).bridges)
+        ? ((t.payload as { bridges: unknown[] }).bridges.length)
+        : 0,
+  }));
+  res.json({ templates });
+});
+
+app.post("/api/bridge-templates", requireAuth, (req, res) => {
+  let payload: BridgeTemplatePayload;
+  try {
+    payload = sanitizeTemplatePayload(req.body?.payload ?? req.body);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "invalid_payload" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const name = String(req.body?.name ?? payload.templateName ?? "Bridge template").trim() || "Bridge template";
+  const descriptionRaw = req.body?.description ?? payload.templateDescription;
+  const template = {
+    id: `template-${randomUUID().slice(0, 12)}`,
+    name,
+    description: descriptionRaw == null ? undefined : String(descriptionRaw),
+    createdAt: now,
+    updatedAt: now,
+    payload,
+  };
+  const templates = workspaceStore.loadBridgeTemplates();
+  templates.unshift(template);
+  workspaceStore.saveBridgeTemplates(templates.slice(0, 100));
+  auditLog.record({ type: "bridge.template.saved", payload: { id: template.id, name } });
+  res.status(201).json({ template: { ...template, payload: undefined } });
+});
+
+app.post("/api/bridge-templates/:templateId/apply", requireAuth, (req, res) => {
+  const template = workspaceStore.loadBridgeTemplates().find((t) => t.id === req.params.templateId);
+  if (!template) {
+    res.status(404).json({ error: "template_not_found" });
+    return;
+  }
+  let payload: BridgeSettingsImportPayload;
+  try {
+    payload = remapTemplatePayloadForApply(template.payload);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "invalid_template" });
+    return;
+  }
+  const summary = applyBridgeSettingsPayload(payload);
+  auditLog.record({ type: "bridge.template.applied", payload: { id: template.id, name: template.name, summary } });
+  res.json({
+    ok: true,
+    summary,
+    districtIds: summary.districtIds,
+    taskIds: summary.taskIds,
+    bridgeIds: payload.bridges.map((b) => String(b.id ?? "")).filter(Boolean),
   });
 });
 

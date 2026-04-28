@@ -46,6 +46,14 @@ type WorkspaceInfo = {
   files: string[];
 };
 
+type RuntimeDiagnostics = {
+  gateway?: { status?: string; port?: number; cdpRelayPort?: number; authenticated?: boolean; authRequired?: boolean };
+  flowers?: { connectedCount?: number; configured?: { id: string; name: string; type: string; enabled: boolean; connected: boolean; lastError?: string }[] };
+  cdpRelay?: { connected?: boolean; attachedTabId?: number | null };
+  discord?: { summary?: string };
+  jobs?: { activeCount?: number; pendingApprovals?: number };
+};
+
 type SettingsTab = "connection" | "auth" | "model" | "workspace" | "status";
 
 function isSettingsTab(value: string): value is SettingsTab {
@@ -114,6 +122,8 @@ export function PmSettingsPanel() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("connection");
 
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null);
+  const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [newWsPath, setNewWsPath] = useState("");
   const [wsLoading, setWsLoading] = useState(false);
   const [restartLoading, setRestartLoading] = useState(false);
@@ -496,6 +506,28 @@ export function PmSettingsPanel() {
       loadWorkspaceInfo();
     }
   }, [activeTab, loadWorkspaceInfo]);
+
+  const loadDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    try {
+      const res = await fetchWithGatewayTimeout(`${gatewayUrl}/api/diagnostics/runtime`, {
+        headers: authHeader(gatewayToken),
+      });
+      if (!res.ok) throw new Error(`Diagnostics failed (${res.status}).`);
+      setDiagnostics((await res.json()) as RuntimeDiagnostics);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Diagnostics failed.");
+      setDiagnostics(null);
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, [gatewayToken, gatewayUrl]);
+
+  useEffect(() => {
+    if (activeTab === "status") {
+      loadDiagnostics();
+    }
+  }, [activeTab, loadDiagnostics]);
 
   const onRestartGateway = useCallback(async () => {
     if (
@@ -941,7 +973,56 @@ export function PmSettingsPanel() {
                   <p>Allowed models</p>
                   <strong>{settings?.modelPolicy.allowedModels.length ?? 0}</strong>
                 </article>
+                <article>
+                  <p>Gateway auth</p>
+                  <strong>
+                    {diagnostics?.gateway?.authRequired === false
+                      ? "Disabled"
+                      : diagnostics?.gateway?.authenticated
+                        ? "Authenticated"
+                        : "Required"}
+                  </strong>
+                </article>
+                <article>
+                  <p>Flower connections</p>
+                  <strong>{diagnostics?.flowers?.connectedCount ?? 0}</strong>
+                </article>
+                <article>
+                  <p>CDP relay</p>
+                  <strong>{diagnostics?.cdpRelay?.connected ? "Connected" : "Offline"}</strong>
+                </article>
+                <article>
+                  <p>Attached tab</p>
+                  <strong>{diagnostics?.cdpRelay?.attachedTabId ?? "None"}</strong>
+                </article>
+                <article>
+                  <p>Active jobs</p>
+                  <strong>{diagnostics?.jobs?.activeCount ?? 0}</strong>
+                </article>
+                <article>
+                  <p>Pending approvals</p>
+                  <strong>{diagnostics?.jobs?.pendingApprovals ?? 0}</strong>
+                </article>
               </div>
+              <div style={{ marginTop: 16 }}>
+                <button type="button" className="btn-secondary" onClick={loadDiagnostics} disabled={diagnosticsLoading}>
+                  {diagnosticsLoading ? "Checking…" : "Refresh diagnostics"}
+                </button>
+              </div>
+              {(diagnostics?.flowers?.configured ?? []).length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h4 style={{ margin: "0 0 8px", fontSize: 15 }}>Automation checklist</h4>
+                  <div className="settings-status-grid">
+                    {(diagnostics?.flowers?.configured ?? []).map((flower) => (
+                      <article key={flower.id}>
+                        <p>{flower.name}</p>
+                        <strong>{flower.enabled ? (flower.connected ? "Ready" : "Offline") : "Disabled"}</strong>
+                        {flower.lastError && <p style={{ marginTop: 4, color: "var(--danger, #ef4444)" }}>{flower.lastError}</p>}
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--line, #e5e5e5)" }}>
                 <h4 style={{ margin: "0 0 8px", fontSize: 15 }}>Gateway restart</h4>
                 <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted)" }}>

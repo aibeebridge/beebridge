@@ -31,6 +31,12 @@ interface FlowerConfig {
   createdAt: string;
 }
 
+type RuntimeDiagnostics = {
+  cdpRelay?: { connected?: boolean; attachedTabId?: number | null };
+  jobs?: { activeCount?: number; pendingApprovals?: number };
+  discord?: { summary?: string };
+};
+
 type TabId = "list" | "add";
 
 const TYPE_LABELS: Record<FlowerConnectionType, string> = {
@@ -91,6 +97,7 @@ export default function FlowersPage() {
   const { apiFetch } = useGateway();
   const [flowers, setFlowers] = useState<FlowerConfig[]>([]);
   const [connectedCount, setConnectedCount] = useState(0);
+  const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<TabId>("list");
@@ -102,9 +109,13 @@ export default function FlowersPage() {
 
   const loadFlowers = useCallback(async () => {
     try {
-      const data = await apiFetch("/api/settings/flowers");
+      const [data, diag] = await Promise.all([
+        apiFetch("/api/settings/flowers"),
+        apiFetch("/api/diagnostics/runtime").catch(() => null),
+      ]);
       setFlowers(Array.isArray(data.flowers) ? data.flowers : []);
       setConnectedCount(data.connectedCount ?? 0);
+      setDiagnostics(diag as RuntimeDiagnostics | null);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -312,6 +323,27 @@ export default function FlowersPage() {
       </header>
 
       {error && <p className="page-error">{error}</p>}
+
+      <section className="panel" style={{ marginBottom: "1rem" }}>
+        <div className="settings-status-grid">
+          <article>
+            <p>CDP relay</p>
+            <strong>{diagnostics?.cdpRelay?.connected ? "Connected" : "Offline"}</strong>
+          </article>
+          <article>
+            <p>Attached tab</p>
+            <strong>{diagnostics?.cdpRelay?.attachedTabId ?? "None"}</strong>
+          </article>
+          <article>
+            <p>Active jobs</p>
+            <strong>{diagnostics?.jobs?.activeCount ?? 0}</strong>
+          </article>
+          <article>
+            <p>Discord</p>
+            <strong style={{ fontSize: 12 }}>{diagnostics?.discord?.summary ?? "Not configured"}</strong>
+          </article>
+        </div>
+      </section>
 
       {/* Tabs */}
       <div className="activity-tabs">

@@ -93,6 +93,15 @@ interface UpstreamOverviewDistrict {
   tasks: { taskId: string; title: string; beeId: string; beeName: string }[];
 }
 
+type ContextSuggestion = {
+  sourceType: "conversation" | "pipeline";
+  sourceId: string;
+  title: string;
+  preview: string;
+  score: number;
+  createdAt: string;
+};
+
 export default function NewTaskPage() {
   const { apiFetch } = useGateway();
   const [step, setStep] = useState<Step>("goal");
@@ -122,6 +131,7 @@ export default function NewTaskPage() {
   const [activeBeeIndex, setActiveBeeIndex] = useState(0);
   const [upstreamOverview, setUpstreamOverview] = useState<UpstreamOverviewDistrict[]>([]);
   const [upstreamLoading, setUpstreamLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<ContextSuggestion[]>([]);
 
   useEffect(() => {
     apiFetch("/api/districts")
@@ -166,6 +176,28 @@ export default function NewTaskPage() {
       cancelled = true;
     };
   }, [step, selectedDistrictId, apiFetch]);
+
+  useEffect(() => {
+    if (selectedDistrictId === "__new__") {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    apiFetch(`/api/context/suggestions?districtId=${encodeURIComponent(selectedDistrictId)}&limit=5`)
+      .then((data) => {
+        if (!cancelled) setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDistrictId, apiFetch]);
+
+  function insertSuggestionIntoGoal(s: ContextSuggestion) {
+    setGoal((cur) => `${cur.trim()}${cur.trim() ? "\n\n" : ""}Prior output (${s.title}):\n${s.preview}`);
+  }
 
   useEffect(() => {
     if (bees.length === 0) return;
@@ -367,6 +399,22 @@ export default function NewTaskPage() {
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
           />
+          {suggestions.length > 0 && (
+            <div style={{ margin: "0.75rem 0", display: "grid", gap: "0.5rem" }}>
+              <strong style={{ fontSize: "0.9rem" }}>Relevant prior outputs</strong>
+              {suggestions.map((s) => (
+                <button
+                  key={`${s.sourceType}:${s.sourceId}`}
+                  type="button"
+                  className="btn-secondary"
+                  style={{ textAlign: "left", whiteSpace: "normal" }}
+                  onClick={() => insertSuggestionIntoGoal(s)}
+                >
+                  {s.title}: {s.preview.slice(0, 120)}
+                </button>
+              ))}
+            </div>
+          )}
           <button className="btn-primary" onClick={handleGoalSubmit} disabled={loading || !goal.trim()}>
             {loading ? "Analyzing..." : "Next \u2192"}
           </button>

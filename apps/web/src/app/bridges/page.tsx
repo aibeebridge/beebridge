@@ -88,6 +88,15 @@ type BridgeSettingsExport = {
   bridges: Bridge[];
 };
 
+type BridgeTemplateSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  districtCount: number;
+  bridgeCount: number;
+  updatedAt: string;
+};
+
 export default function BridgesPage() {
   const { apiFetch, url, token } = useGateway();
   const [districts, setDistricts] = useState<District[]>([]);
@@ -116,6 +125,11 @@ export default function BridgesPage() {
   const [lastSelectedEdgeIds, setLastSelectedEdgeIds] = useState<string[]>([]);
   const [exportingSelection, setExportingSelection] = useState(false);
   const [importingSelection, setImportingSelection] = useState(false);
+  const [templates, setTemplates] = useState<BridgeTemplateSummary[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [notice, setNotice] = useState("");
   const saveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -169,6 +183,13 @@ export default function BridgesPage() {
     }
   }, [apiFetch]);
 
+  const loadTemplates = useCallback(async () => {
+    const data = await apiFetch("/api/bridge-templates").catch(() => ({ templates: [] }));
+    const list = Array.isArray(data.templates) ? data.templates : [];
+    setTemplates(list);
+    setSelectedTemplateId((prev) => prev || list[0]?.id || "");
+  }, [apiFetch]);
+
   const loadData = useCallback(async () => {
     try {
       const [dData, gData] = await Promise.all([
@@ -217,7 +238,8 @@ export default function BridgesPage() {
 
   useEffect(() => {
     loadPipelineHistory();
-  }, [loadPipelineHistory]);
+    loadTemplates();
+  }, [loadPipelineHistory, loadTemplates]);
 
   useEffect(() => {
     const wsUrl = gatewayWsUrl(url, token);
@@ -565,54 +587,56 @@ export default function BridgesPage() {
     return { district, bees, tasks };
   }
 
-  async function handleExportSelection() {
+  async function collectBridgeSelectionPayload(): Promise<BridgeSettingsExport> {
     if (effectiveNodeIds.length === 0) {
-      setError("Select at least one district on the graph first.");
-      return;
+      throw new Error("Select at least one district on the graph first.");
     }
 
+    const selectedDistrictSet = new Set(effectiveNodeIds);
+    const districtPayloads = await Promise.all(
+      effectiveNodeIds.map(async (districtId) => {
+        const raw = await apiFetch(`/api/districts/${encodeURIComponent(districtId)}`);
+        const normalized = normalizeDistrictBundle(raw, districtId);
+        if (!normalized) {
+          throw new Error(`Failed to collect district payload: ${districtId}`);
+        }
+        return normalized;
+      }),
+    );
+
+    const selectedBridges = bridges
+      .filter(
+        (b) =>
+          selectedBridgeIdSet.has(b.id) ||
+          (selectedDistrictSet.has(b.fromDistrictId) && selectedDistrictSet.has(b.toDistrictId)),
+      )
+      .map((b) => ({
+        id: b.id,
+        fromDistrictId: b.fromDistrictId,
+        toDistrictId: b.toDistrictId,
+        label: b.label,
+        description: b.description,
+        direction: b.direction,
+        status: b.status,
+        dataFlow: b.dataFlow,
+        createdAt: b.createdAt,
+      }));
+
+    return {
+      format: "beebridge.bridge-settings.v1",
+      exportedAt: new Date().toISOString(),
+      startDistrictId: startDistrictId && selectedDistrictSet.has(startDistrictId) ? startDistrictId : null,
+      districts: districtPayloads,
+      bridges: selectedBridges,
+    };
+  }
+
+  async function handleExportSelection() {
     setExportingSelection(true);
     setError("");
     setNotice("");
     try {
-      const selectedDistrictSet = new Set(effectiveNodeIds);
-      const districtPayloads = await Promise.all(
-        effectiveNodeIds.map(async (districtId) => {
-          const raw = await apiFetch(`/api/districts/${encodeURIComponent(districtId)}`);
-          const normalized = normalizeDistrictBundle(raw, districtId);
-          if (!normalized) {
-            throw new Error(`Failed to collect district payload: ${districtId}`);
-          }
-          return normalized;
-        }),
-      );
-
-      const selectedBridges = bridges
-        .filter(
-          (b) =>
-            selectedBridgeIdSet.has(b.id) ||
-            (selectedDistrictSet.has(b.fromDistrictId) && selectedDistrictSet.has(b.toDistrictId)),
-        )
-        .map((b) => ({
-          id: b.id,
-          fromDistrictId: b.fromDistrictId,
-          toDistrictId: b.toDistrictId,
-          label: b.label,
-          description: b.description,
-          direction: b.direction,
-          status: b.status,
-          dataFlow: b.dataFlow,
-          createdAt: b.createdAt,
-        }));
-
-      const payload: BridgeSettingsExport = {
-        format: "beebridge.bridge-settings.v1",
-        exportedAt: new Date().toISOString(),
-        startDistrictId: startDistrictId && selectedDistrictSet.has(startDistrictId) ? startDistrictId : null,
-        districts: districtPayloads,
-        bridges: selectedBridges,
-      };
-
+      const payload = await collectBridgeSelectionPayload();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const href = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -627,6 +651,47 @@ export default function BridgesPage() {
       setError(e instanceof Error ? e.message : "Failed to export selection");
     } finally {
       setExportingSelection(false);
+    }
+  }
+
+  async function handleSaveTemplate() {
+    setSavingTemplate(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await collectBridgeSelectionPayload();
+      const data = await apiFetch("/api/bridge-templates", {
+        method: "POST",
+        body: JSON.stringify({
+          name: templateName.trim() || `Template ${new Date().toLocaleDateString()}`,
+          payload,
+        }),
+      });
+      await loadTemplates();
+      setTemplateName("");
+      setNotice(`Saved template ${data?.template?.name ?? ""}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save template");
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  async function handleApplyTemplate() {
+    if (!selectedTemplateId) return;
+    setApplyingTemplate(true);
+    setError("");
+    setNotice("");
+    try {
+      const data = await apiFetch(`/api/bridge-templates/${encodeURIComponent(selectedTemplateId)}/apply`, {
+        method: "POST",
+      });
+      await loadData();
+      setNotice(`Created ${Number(data?.summary?.districts ?? 0)} districts and ${Number(data?.summary?.tasks ?? 0)} tasks from template.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply template");
+    } finally {
+      setApplyingTemplate(false);
     }
   }
 
@@ -802,6 +867,42 @@ export default function BridgesPage() {
               disabled={exportingSelection || effectiveNodeIds.length === 0}
             >
               {exportingSelection ? "Exporting..." : "Export JSON"}
+            </button>
+            <input
+              className="input"
+              style={{ width: 180, height: 32 }}
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder="Template name"
+            />
+            <button
+              className="btn-secondary btn-sm"
+              type="button"
+              onClick={handleSaveTemplate}
+              disabled={savingTemplate || effectiveNodeIds.length === 0}
+            >
+              {savingTemplate ? "Saving..." : "Save template"}
+            </button>
+            <select
+              className="input"
+              style={{ width: 190, height: 32 }}
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+            >
+              <option value="">No template</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.districtCount}/{t.bridgeCount})
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn-secondary btn-sm"
+              type="button"
+              onClick={handleApplyTemplate}
+              disabled={applyingTemplate || !selectedTemplateId}
+            >
+              {applyingTemplate ? "Creating..." : "Create from template"}
             </button>
             <button
               className="btn-secondary btn-sm"

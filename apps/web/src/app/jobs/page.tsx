@@ -258,6 +258,7 @@ function CityBoardPage() {
   const [districts, setDistricts] = useState<BeeDistrict[]>([]);
   const [loading, setLoading] = useState(true);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [resumingId, setResumingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState<"city" | "kanban">("city");
@@ -434,6 +435,20 @@ function CityBoardPage() {
       setError(err instanceof Error ? err.message : "Retry failed");
     } finally {
       setRetryingId(null);
+    }
+  }
+
+  async function handleResume(taskId: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setResumingId(taskId);
+    try {
+      await apiFetch(`/api/jobs/${taskId}/resume`, { method: "POST" });
+      loadTasks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Resume failed");
+    } finally {
+      setResumingId(null);
     }
   }
 
@@ -669,8 +684,10 @@ function CityBoardPage() {
                       key={task.id}
                       task={task}
                       retryingId={retryingId}
+                      resumingId={resumingId}
                       deletingId={deletingId}
                       onRetry={handleRetry}
+                      onResume={handleResume}
                       onDelete={handleDeleteTask}
                     />
                   ))}
@@ -698,8 +715,10 @@ function CityBoardPage() {
                       key={task.id}
                       task={task}
                       retryingId={retryingId}
+                      resumingId={resumingId}
                       deletingId={deletingId}
                       onRetry={handleRetry}
+                      onResume={handleResume}
                       onDelete={handleDeleteTask}
                     />
                   ))}
@@ -725,8 +744,10 @@ function CityBoardPage() {
                       key={task.id}
                       task={task}
                       retryingId={retryingId}
+                      resumingId={resumingId}
                       deletingId={deletingId}
                       onRetry={handleRetry}
+                      onResume={handleResume}
                       onDelete={handleDeleteTask}
                     />
                   ))}
@@ -743,14 +764,18 @@ function CityBoardPage() {
 function TaskCard({
   task,
   retryingId,
+  resumingId,
   deletingId,
   onRetry,
+  onResume,
   onDelete,
 }: {
   task: BeeTask & { _column: Column; _convStatus?: string };
   retryingId: string | null;
+  resumingId: string | null;
   deletingId: string | null;
   onRetry: (taskId: string, e: React.MouseEvent) => void;
+  onResume: (taskId: string, e: React.MouseEvent) => void;
   onDelete?: (taskId: string, e: React.MouseEvent) => void;
 }) {
   const jobHref = `/jobs/${encodeURIComponent(task.id)}`;
@@ -807,6 +832,18 @@ function TaskCard({
             disabled={retryingId === task.id}
           >
             {retryingId === task.id ? "..." : "Restart"}
+          </button>
+          <button
+            type="button"
+            className="btn-retry-small"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onResume(task.id, e);
+            }}
+            disabled={resumingId === task.id}
+          >
+            {resumingId === task.id ? "..." : "Resume"}
           </button>
         </div>
       )}

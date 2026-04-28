@@ -83,6 +83,15 @@ interface TaskInfo {
   personaId?: string;
 }
 
+type ContextSuggestion = {
+  sourceType: "conversation" | "pipeline";
+  sourceId: string;
+  title: string;
+  preview: string;
+  score: number;
+  createdAt: string;
+};
+
 interface BeePersonaRow {
   id: string;
   name: string;
@@ -140,6 +149,7 @@ export default function TaskDetailPage() {
   const [schedForm, setSchedForm] = useState<Partial<TaskSchedule>>({});
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [retryMsg, setRetryMsg] = useState("");
@@ -152,6 +162,7 @@ export default function TaskDetailPage() {
   const [defaultProvider, setDefaultProvider] = useState("openai");
   const [defaultModel, setDefaultModel] = useState("gpt-4o");
   const [aiSummary, setAiSummary] = useState<AiHistorySummary | null>(null);
+  const [contextSuggestions, setContextSuggestions] = useState<ContextSuggestion[]>([]);
   const [expandedEntries, setExpandedEntries] = useState<Set<number>>(new Set());
   const [districtGraphTasks, setDistrictGraphTasks] = useState<BeeGraphTask[]>([]);
   const [graphSaving, setGraphSaving] = useState(false);
@@ -446,6 +457,24 @@ export default function TaskDetailPage() {
   }, [conversationViewKey]);
 
   useEffect(() => {
+    if (!taskInfo?.districtId) {
+      setContextSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    apiFetch(`/api/context/suggestions?districtId=${encodeURIComponent(taskInfo.districtId)}&taskId=${encodeURIComponent(taskId)}&limit=5`)
+      .then((data) => {
+        if (!cancelled) setContextSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+      })
+      .catch(() => {
+        if (!cancelled) setContextSuggestions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiFetch, taskId, taskInfo?.districtId]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [displayConv?.entries.length]);
 
@@ -461,6 +490,21 @@ export default function TaskDetailPage() {
       setRetryMsg(e instanceof Error ? e.message : "Retry failed");
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function handleResume() {
+    setResuming(true);
+    setRetryMsg("");
+    try {
+      await apiFetch(`/api/jobs/${taskId}/resume`, { method: "POST" });
+      setRetryMsg("Resume started.");
+      loadConversation();
+      loadSchedule();
+    } catch (e) {
+      setRetryMsg(e instanceof Error ? e.message : "Resume failed");
+    } finally {
+      setResuming(false);
     }
   }
 
@@ -481,6 +525,17 @@ export default function TaskDetailPage() {
         el.setSelectionRange(pos, pos);
       });
       return { ...s, description: next };
+    });
+  }
+
+  function insertContextSuggestion(s: ContextSuggestion) {
+    setEditTask(true);
+    setTaskForm((cur) => {
+      const current = String(cur.description ?? taskInfo?.description ?? "");
+      return {
+        ...cur,
+        description: `${current.trim()}${current.trim() ? "\n\n" : ""}Prior output (${s.title}):\n${s.preview}`,
+      };
     });
   }
 
@@ -820,6 +875,24 @@ export default function TaskDetailPage() {
               <div className="schedule-row">
                 <span className="schedule-label">Description</span>
                 <span style={{ whiteSpace: "pre-wrap" }}>{taskInfo.description}</span>
+              </div>
+            )}
+            {contextSuggestions.length > 0 && (
+              <div className="schedule-row">
+                <span className="schedule-label">Prior outputs</span>
+                <span style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  {contextSuggestions.map((s) => (
+                    <button
+                      key={`${s.sourceType}:${s.sourceId}`}
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      style={{ textAlign: "left", whiteSpace: "normal" }}
+                      onClick={() => insertContextSuggestion(s)}
+                    >
+                      {s.title}: {s.preview.slice(0, 120)}
+                    </button>
+                  ))}
+                </span>
               </div>
             )}
             <div className="schedule-row">
@@ -1346,6 +1419,9 @@ export default function TaskDetailPage() {
                 : ""}</p>
               <button className="btn-danger" onClick={handleRetry} disabled={retrying}>
                 {retrying ? "Retrying..." : "Restart"}
+              </button>
+              <button className="btn-secondary" onClick={handleResume} disabled={resuming}>
+                {resuming ? "Resuming..." : "Resume"}
               </button>
             </div>
           )}

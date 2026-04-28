@@ -15,11 +15,11 @@ export function DevBadge() {
   const envLabel = isProdBuild ? "production" : "development";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { url, token, connected } = useGateway();
-  const [info, setInfo] = useState<{ uptime?: string; version?: string } | null>(null);
+  const { url, token, connected, reachable, authenticated, authRequired } = useGateway();
+  const [info, setInfo] = useState<{ uptime?: string; version?: string; authenticated?: boolean; authRequired?: boolean } | null>(null);
 
   useEffect(() => {
-    if (!open || !connected) return;
+    if (!open || !reachable) return;
     fetchWithGatewayTimeout(gatewayHealthUrl(url), {
       headers: { Authorization: `Bearer ${token}` },
     }, GATEWAY_HEALTH_TIMEOUT_MS)
@@ -32,7 +32,7 @@ export function DevBadge() {
         }
       })
       .catch(() => setInfo(null));
-  }, [open, connected, url, token]);
+  }, [open, reachable, url, token]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,8 +54,13 @@ export function DevBadge() {
           <div className="dev-badge-panel-rows">
             <div className="dev-badge-row">
               <span className="dev-badge-label">Gateway</span>
+              <span className={`dev-badge-dot ${reachable ? "on" : "off"}`} />
+              <span>{reachable ? "Reachable" : "Offline"}</span>
+            </div>
+            <div className="dev-badge-row">
+              <span className="dev-badge-label">Auth</span>
               <span className={`dev-badge-dot ${connected ? "on" : "off"}`} />
-              <span>{connected ? "Connected" : "Disconnected"}</span>
+              <span>{authRequired ? (authenticated ? "Authenticated" : "Required") : "Disabled"}</span>
             </div>
             <div className="dev-badge-row">
               <span className="dev-badge-label">URL</span>

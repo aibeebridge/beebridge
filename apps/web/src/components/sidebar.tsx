@@ -21,7 +21,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { connected } = useGateway();
+  const { connected, reachable, authRequired } = useGateway();
   const { collapsed } = useSidebarLayout();
 
   return (
@@ -34,7 +34,7 @@ export function Sidebar() {
             </div>
             <div className="sidebar-status-wrap">
               <span className={`sidebar-status ${connected ? "online" : "offline"}`}>
-                {connected ? "Connected" : "Disconnected"}
+                {connected ? "Connected" : reachable && authRequired ? "Auth needed" : "Disconnected"}
               </span>
             </div>
           </div>

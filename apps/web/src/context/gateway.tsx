@@ -171,6 +171,9 @@ interface GatewayContextValue {
   url: string;
   token: string;
   connected: boolean;
+  reachable: boolean;
+  authenticated: boolean;
+  authRequired: boolean;
   setUrl: (url: string) => void;
   setToken: (token: string) => void;
   setConnected: (v: boolean) => void;
@@ -201,6 +204,9 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     return "";
   });
   const [connected, setConnected] = useState(false);
+  const [reachable, setReachable] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authRequired, setAuthRequired] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -233,16 +239,27 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
           GATEWAY_HEALTH_TIMEOUT_MS,
         );
         if (cancelled) return;
-        if (!r.ok) { setConnected(false); return; }
-        let body: { tokenValid?: boolean } = {};
-        try { body = await r.json(); } catch { /* ignore */ }
-        if (body.tokenValid === false) {
+        if (!r.ok) {
+          setReachable(false);
+          setAuthenticated(false);
           setConnected(false);
           return;
         }
-        setConnected(true);
+        let body: { reachable?: boolean; authenticated?: boolean; authRequired?: boolean; tokenValid?: boolean } = {};
+        try { body = await r.json(); } catch { /* ignore */ }
+        const nextReachable = body.reachable !== false;
+        const nextAuthRequired = body.authRequired !== false;
+        const nextAuthenticated = nextAuthRequired ? body.authenticated === true || body.tokenValid === true : true;
+        setReachable(nextReachable);
+        setAuthRequired(nextAuthRequired);
+        setAuthenticated(nextAuthenticated);
+        setConnected(nextReachable && nextAuthenticated);
       } catch {
-        if (!cancelled) setConnected(false);
+        if (!cancelled) {
+          setReachable(false);
+          setAuthenticated(false);
+          setConnected(false);
+        }
       }
     }
 
@@ -287,7 +304,9 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <GatewayContext.Provider value={{ url, token, connected, setUrl, setToken, setConnected, apiFetch }}>
+    <GatewayContext.Provider
+      value={{ url, token, connected, reachable, authenticated, authRequired, setUrl, setToken, setConnected, apiFetch }}
+    >
       {children}
     </GatewayContext.Provider>
   );
