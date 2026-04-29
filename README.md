@@ -1,6 +1,6 @@
 # beebridge
 
-English | [한국어](README.ko.md)
+English | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md)
 
 **Website**: <https://aibeebridge.pages.dev/>
 

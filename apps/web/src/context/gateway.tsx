@@ -167,6 +167,8 @@ export function gatewayWsUrl(urlState: string, token: string): string {
   return `${ws}/ws?token=${encodeURIComponent(token)}`;
 }
 
+type GatewayApiFetch = <T = any>(path: string, init?: RequestInit) => Promise<T>;
+
 interface GatewayContextValue {
   url: string;
   token: string;
@@ -177,7 +179,7 @@ interface GatewayContextValue {
   setUrl: (url: string) => void;
   setToken: (token: string) => void;
   setConnected: (v: boolean) => void;
-  apiFetch: (path: string, init?: RequestInit) => Promise<any>;
+  apiFetch: GatewayApiFetch;
 }
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
@@ -268,7 +270,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   }, [url, token]);
 
   const apiFetch = useCallback(
-    async (path: string, init?: RequestInit) => {
+    async <T = any,>(path: string, init?: RequestInit): Promise<T> => {
       let res: Response;
       try {
         res = await fetchWithGatewayTimeout(gatewayFetchUrl(url, path), {
@@ -293,9 +295,9 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
         throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 500)}`);
       }
       setConnected(true);
-      if (res.status === 204) return {};
+      if (res.status === 204) return {} as T;
       try {
-        return parseGatewayJsonBody(text, path);
+        return parseGatewayJsonBody(text, path) as T;
       } catch (parseErr) {
         throw parseErr;
       }
