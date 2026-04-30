@@ -4,6 +4,8 @@ import os from "node:os";
 
 const GLOBAL_DIR = path.join(os.homedir(), ".beebridge");
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_DIR, "config.json");
+const DEFAULT_WORKSPACE_DIR = path.join(GLOBAL_DIR, "workspace");
+const LEGACY_HOME_DATA_ROOT = path.join(GLOBAL_DIR, ".beebridge");
 
 interface GlobalConfig {
   workspacePath: string;
@@ -14,10 +16,10 @@ function ensureDir(dirPath: string): void {
 }
 
 /**
- * Subfolders under `{dataRoot}/workspace` used by WorkspaceStore, graph, chain, etc.
- * Created up-front so the tree exists before any save.
+ * Beebridge app-state folders under `{workspacePath}/state`.
+ * Legacy installs used nested data roots; those are migrated for home installs.
  */
-const WORKSPACE_DATA_SUBDIRS = ["districts", "bridges", "jobs", "activity", "team", "projects"] as const;
+const STATE_DATA_SUBDIRS = ["districts", "bridges", "jobs", "activity", "team"] as const;
 
 export class WorkspaceConfig {
   private _workspacePath: string;
@@ -28,15 +30,17 @@ export class WorkspaceConfig {
   }
 
   /**
-   * Create `{dataRoot}/workspace` and standard children (districts, jobs, …).
-   * Also ensures `{dataRoot}` exists. Safe after `setWorkspacePath`.
+   * Create app state and code-project folders. Safe after `setWorkspacePath`.
    */
   ensureDataLayout(): void {
     try {
+      this.migrateLegacyHomeDataRoot();
+      ensureDir(this._workspacePath);
       ensureDir(this.dataRoot);
-      ensureDir(this.workspaceRoot);
-      for (const sub of WORKSPACE_DATA_SUBDIRS) {
-        ensureDir(path.join(this.workspaceRoot, sub));
+      ensureDir(this.stateRoot);
+      ensureDir(this.codeProjectsRoot);
+      for (const sub of STATE_DATA_SUBDIRS) {
+        ensureDir(path.join(this.stateRoot, sub));
       }
     } catch (e) {
       console.error("[WorkspaceConfig] ensureDataLayout failed:", e);
@@ -47,21 +51,35 @@ export class WorkspaceConfig {
     return this._workspacePath;
   }
 
-  /** Root for all beebridge data: {workspacePath}/.beebridge (or legacy .beebridge-data) */
+  /** Root for all beebridge data: the workspace path itself (or legacy .beebridge-data). */
   get dataRoot(): string {
     const legacy = path.join(this._workspacePath, ".beebridge-data");
     if (fs.existsSync(legacy)) return legacy;
-    return path.join(this._workspacePath, ".beebridge");
+    return this._workspacePath;
   }
 
-  /** Workspace data sub-root: {dataRoot}/workspace */
-  get workspaceRoot(): string {
+  private get legacyWorkspaceRoot(): string {
     return path.join(this.dataRoot, "workspace");
   }
 
-  /** Root for code generation projects: {workspaceRoot}/projects */
+  /** App state sub-root for districts, jobs, bridges, activity, and team files. */
+  get stateRoot(): string {
+    return path.join(this.dataRoot, "state");
+  }
+
+  /** Root for code generation projects. */
+  get codeProjectsRoot(): string {
+    return path.join(this.dataRoot, "code-projects");
+  }
+
+  /** @deprecated Use `stateRoot`. Kept so existing WorkspaceStore callers do not need to change at once. */
+  get workspaceRoot(): string {
+    return this.stateRoot;
+  }
+
+  /** @deprecated Use `codeProjectsRoot`. */
   get projectsRoot(): string {
-    return path.join(this.workspaceRoot, "projects");
+    return this.codeProjectsRoot;
   }
 
   getWorkspacePath(): string {
@@ -88,7 +106,16 @@ export class WorkspaceConfig {
   }
 
   /** Summary for API / diagnostics */
-  info(): { workspacePath: string; dataRoot: string; workspaceRoot: string; files: string[] } {
+  info(): {
+    workspacePath: string;
+    dataRoot: string;
+    stateRoot: string;
+    codeProjectsRoot: string;
+    workspaceRoot: string;
+    projectsRoot: string;
+    legacyWorkspaceRoot?: string;
+    files: string[];
+  } {
     const dataRoot = this.dataRoot;
     const files: string[] = [];
     try {
@@ -108,7 +135,11 @@ export class WorkspaceConfig {
     return {
       workspacePath: this._workspacePath,
       dataRoot,
-      workspaceRoot: this.workspaceRoot,
+      stateRoot: this.stateRoot,
+      codeProjectsRoot: this.codeProjectsRoot,
+      workspaceRoot: this.stateRoot,
+      projectsRoot: this.codeProjectsRoot,
+      ...(fs.existsSync(this.legacyWorkspaceRoot) ? { legacyWorkspaceRoot: this.legacyWorkspaceRoot } : {}),
       files,
     };
   }
@@ -124,8 +155,10 @@ export class WorkspaceConfig {
     if (global?.workspacePath) {
       const p = path.resolve(global.workspacePath);
       if (!this.isInsideGateway(p)) {
-        if (!fs.existsSync(p)) ensureDir(p);
-        return p;
+        const workspacePath = this.isHomeInstallRoot(p) ? DEFAULT_WORKSPACE_DIR : p;
+        if (!fs.existsSync(workspacePath)) ensureDir(workspacePath);
+        if (workspacePath !== p) this.saveGlobal({ workspacePath });
+        return workspacePath;
       }
     }
 
@@ -135,6 +168,12 @@ export class WorkspaceConfig {
     const legacyDir = path.join(projectRoot, ".beebridge-data");
     if (fs.existsSync(legacyDir)) {
       return projectRoot;
+    }
+
+    if (this.isHomeInstallRoot(projectRoot)) {
+      ensureDir(DEFAULT_WORKSPACE_DIR);
+      this.saveGlobal({ workspacePath: DEFAULT_WORKSPACE_DIR });
+      return DEFAULT_WORKSPACE_DIR;
     }
 
     return projectRoot;
@@ -166,6 +205,33 @@ export class WorkspaceConfig {
   private isInsideGateway(p: string): boolean {
     const normalized = p.replace(/\\/g, "/").toLowerCase();
     return normalized.includes("/apps/gateway");
+  }
+
+  private isHomeInstallRoot(p: string): boolean {
+    return path.resolve(p) === path.resolve(GLOBAL_DIR);
+  }
+
+  private isDefaultWorkspacePath(p: string): boolean {
+    return path.resolve(p) === path.resolve(DEFAULT_WORKSPACE_DIR);
+  }
+
+  private migrateLegacyHomeDataRoot(): void {
+    if (!this.isDefaultWorkspacePath(this._workspacePath)) return;
+    ensureDir(GLOBAL_DIR);
+    for (const sourceRoot of [LEGACY_HOME_DATA_ROOT, path.join(DEFAULT_WORKSPACE_DIR, ".beebridge")]) {
+      if (!fs.existsSync(sourceRoot)) continue;
+      ensureDir(DEFAULT_WORKSPACE_DIR);
+      for (const entry of fs.readdirSync(sourceRoot)) {
+        const from = path.join(sourceRoot, entry);
+        const to = path.join(DEFAULT_WORKSPACE_DIR, entry);
+        if (!fs.existsSync(to)) fs.renameSync(from, to);
+      }
+      try {
+        fs.rmdirSync(sourceRoot);
+      } catch {
+        // Leave non-empty legacy folders in place if any files could not be moved safely.
+      }
+    }
   }
 
   private loadGlobal(): GlobalConfig | null {

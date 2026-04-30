@@ -6,6 +6,7 @@ import type {
   PmAuthProfile,
   PmModelPolicy,
   PmSettings,
+  PmSandboxSettings,
   ProviderAuthMode,
   ProviderCatalogItem,
 } from "@beebridge/core";
@@ -34,6 +35,12 @@ function initialBeePolicy(): BeeAssignmentPolicy {
   };
 }
 
+function initialSandboxSettings(): PmSandboxSettings {
+  return {
+    mode: "off",
+  };
+}
+
 export class PmSettingsStore {
   private settings: PmSettings;
   private readonly dataDir: string;
@@ -44,12 +51,13 @@ export class PmSettingsStore {
     this.settingsFile = path.join(dataRoot, "pm-settings.json");
     const loaded = this.loadFromDisk();
     if (loaded) {
-      this.settings = loaded;
+      this.settings = this.normalizeSettings(loaded);
     } else {
       this.settings = {
         authProfiles: [],
         modelPolicy: initialModelPolicy(providerCatalog),
         beePolicy: initialBeePolicy(),
+        sandbox: initialSandboxSettings(),
       };
     }
   }
@@ -142,6 +150,16 @@ export class PmSettingsStore {
     return { ...this.settings.modelPolicy };
   }
 
+  public getSandboxSettings(): PmSandboxSettings {
+    return { ...this.settings.sandbox };
+  }
+
+  public setSandboxMode(mode: PmSandboxSettings["mode"]): PmSandboxSettings {
+    this.settings.sandbox = { ...this.settings.sandbox, mode };
+    this.saveToDisk();
+    return { ...this.settings.sandbox };
+  }
+
   public getCatalog(): ProviderCatalogItem[] {
     return structuredClone(this.providerCatalog);
   }
@@ -164,5 +182,12 @@ export class PmSettingsStore {
     const data = safeReadJson<PmSettings | null>(this.settingsFile, null);
     if (!data?.authProfiles || !data?.modelPolicy || !data?.beePolicy) return null;
     return data;
+  }
+
+  private normalizeSettings(settings: PmSettings): PmSettings {
+    return {
+      ...settings,
+      sandbox: settings.sandbox ?? initialSandboxSettings(),
+    };
   }
 }

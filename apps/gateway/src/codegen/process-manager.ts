@@ -10,6 +10,8 @@ interface ProcessSession {
 
 const MAX_OUTPUT_LINES = 5000;
 
+type SpawnCommand = (command: string, cwd: string, sessionId: string) => ChildProcess;
+
 /** Kill an entire process group so child processes (e.g. esbuild spawned by Vite) are also reaped. */
 function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
   const pid = proc.pid;
@@ -53,14 +55,27 @@ export class ProcessManager {
     this.sessions.set(sessionId, session);
   }
 
-  start(command: string, cwd: string): string {
+  start(command: string, cwd: string, options?: { spawnCommand?: SpawnCommand }): string {
     const sessionId = `${this.sessionIdPrefix}-${globalBackgroundSessionSeq++}`;
-    const proc = spawn("/bin/sh", ["-c", command], {
-      cwd,
-      detached: true,
-      env: { ...process.env, HOME: process.env.HOME },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let proc: ChildProcess;
+    try {
+      proc = options?.spawnCommand
+        ? options.spawnCommand(command, cwd, sessionId)
+        : spawn("/bin/sh", ["-c", command], {
+            cwd,
+            detached: true,
+            env: { ...process.env, HOME: process.env.HOME },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      proc = spawn("/bin/sh", ["-c", `printf '%s\\n' ${JSON.stringify(message)} >&2; exit 1`], {
+        cwd,
+        detached: true,
+        env: { ...process.env, HOME: process.env.HOME },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
 
     const session: ProcessSession = {
       proc,

@@ -31,10 +31,15 @@ export interface BeeAssignmentPolicy {
   providerToBee: Record<string, string>;
 }
 
+export interface PmSandboxSettings {
+  mode: "off" | "docker";
+}
+
 export interface PmSettings {
   authProfiles: PmAuthProfile[];
   modelPolicy: PmModelPolicy;
   beePolicy: BeeAssignmentPolicy;
+  sandbox: PmSandboxSettings;
 }
 
 export type DistrictStatus = "planning" | "active" | "completed";
@@ -93,8 +98,33 @@ export interface BeeDistrict {
    * When true/undefined, default upstream context is added.
    */
   useUpstreamBridgeContext?: boolean;
-  /** Shared project directory for code tasks in this district */
+  /** Logical code project id resolved through the gateway project registry. */
+  codeProjectId?: string;
+  /** Shared project directory for code tasks in this district. Legacy-only; migrated lazily to codeProjectId. */
   codeProjectPath?: string;
+}
+
+export type CodeProjectSource = "auto" | "local" | "imported_workflow" | "legacy_path";
+export type CodeProjectStatus = "ready" | "missing" | "archived";
+
+export interface CodeProjectRecord {
+  id: string;
+  name: string;
+  slug: string;
+  path: string;
+  source: CodeProjectSource;
+  status: CodeProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+  externalProjectId?: string;
+}
+
+export interface ResolvedCodeProject {
+  id: string;
+  name: string;
+  path: string;
+  source: CodeProjectSource;
+  status: CodeProjectStatus;
 }
 
 /** One saved bridge pipeline execution (persisted under workspace bridges/). */
@@ -103,6 +133,9 @@ export interface PipelineRunRecord {
   startedAt: string;
   finishedAt: string;
   startDistrictId: string;
+  resolvedProjectId?: string;
+  resolvedProjectPath?: string;
+  projectSource?: CodeProjectSource;
   orderedTaskIds: string[];
   summary: string;
   districtResults: {

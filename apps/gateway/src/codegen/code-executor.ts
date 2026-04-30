@@ -12,6 +12,11 @@ import type { TaskContext } from "../browser/controller.js";
 import { executeTaskViaCdp } from "../browser/controller.js";
 import type { AiHistoryEntry } from "../server/ai-history-store.js";
 import { resolveOpenAiSecretToApiKey } from "../browser/openai-codex-token.js";
+import {
+  resolveSandboxConfig,
+  runSandboxedShellCommand,
+  spawnSandboxedShellCommand,
+} from "./sandbox.js";
 
 const MAX_AGENT_STEPS = 30;
 const MAX_TOKEN_BUDGET = 200_000;
@@ -243,7 +248,12 @@ function runShellCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
-): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  projectId?: string,
+): Promise<{ ok: boolean; stdout: string; stderr: string; sandboxed?: boolean }> {
+  if (resolveSandboxConfig().mode === "docker") {
+    return runSandboxedShellCommand(command, cwd, timeoutMs, projectId);
+  }
+
   return new Promise((resolve) => {
     const child = execFile(
       "/bin/sh",
@@ -342,6 +352,7 @@ export async function executeCodeTask(
   bridgeOutMap?: Map<string, string>,
   depth = 0,
   sharedProjectPath?: string,
+  sharedProjectId?: string,
   abortSignal?: AbortSignal,
   llmConfigOverride?: Partial<LlmConfig>,
 ): Promise<CodeTaskResult> {
@@ -363,6 +374,7 @@ export async function executeCodeTask(
   const projectPath = sharedProjectPath ?? projectManager.createProjectDir(task.id, task.title);
   const processManager = new ProcessManager();
   const subtaskManager = depth === 0 ? new SubTaskManager() : null;
+  const sandboxConfig = resolveSandboxConfig();
 
   const gatewaySource = "Gateway";
   const workerSource = `Worker LLM (${llmConfig.providerId}/${llmConfig.model})`;
@@ -398,8 +410,13 @@ export async function executeCodeTask(
     ctx.broadcastToWeb({ type: "job.update", jobId, entry });
   };
 
-  sendProgress("system", `Code task received: ${task.title}\nProject: ${projectPath}`, gatewaySource, "system");
-  ctx.log("CODE", `starting code agent loop for task ${jobId}, project=${projectPath}, model=${llmConfig.model}`);
+  sendProgress(
+    "system",
+    `Code task received: ${task.title}\nProject: ${projectPath}\nSandbox: ${sandboxConfig.mode === "docker" ? `docker (${sandboxConfig.image}, network=${sandboxConfig.network})` : "off"}`,
+    gatewaySource,
+    "system",
+  );
+  ctx.log("CODE", `starting code agent loop for task ${jobId}, project=${projectPath}, model=${llmConfig.model}, sandbox=${sandboxConfig.mode}`);
 
   const spawnTools = depth === 0 ? [SPAWN_TASK_TOOL, CHECK_TASK_TOOL] : [];
   const allTools = [
@@ -655,6 +672,7 @@ export async function executeCodeTask(
             bridgeOutMap,
             depth + 1,
             projectPath,
+            sharedProjectId,
             childAbortController.signal,
             modelOverride ? { model: modelOverride } : undefined,
           );
@@ -919,15 +937,24 @@ export async function executeCodeTask(
 
         if (shouldBackground) {
           const targetPm = persistAfterJob ? gatewayPersistentBackgroundProcesses : processManager;
-          const sessionId = targetPm.start(command, projectPath);
+          const sessionId = targetPm.start(
+            command,
+            projectPath,
+            sandboxConfig.mode === "docker"
+              ? { spawnCommand: (cmd, cwd, sessionId) => spawnSandboxedShellCommand(cmd, cwd, sessionId, sharedProjectId) }
+              : undefined,
+          );
           const modeHint = inferredBackground
             ? `\n(Note: trailing '&' in command was normalized to managed background mode.)`
+            : "";
+          const sandboxHint = sandboxConfig.mode === "docker"
+            ? "\nSandbox: Docker container with only this code project mounted at /project."
             : "";
           const persistHint = persistAfterJob
             ? "\nThis process is kept running after the task completes until the Beebridge gateway stops or you call process(action=\"kill\")."
             : "";
           const msg =
-            `Background process started: session_id="${sessionId}"\nUse process(action="read_output", session_id="${sessionId}") to check output.${modeHint}${persistHint}`;
+            `Background process started: session_id="${sessionId}"\nUse process(action="read_output", session_id="${sessionId}") to check output.${modeHint}${sandboxHint}${persistHint}`;
           sendProgress("run_command", `$ ${command} & → ${sessionId}`, codeSource);
           messages.push({ role: "tool", tool_call_id: tc.id, content: msg });
           continue;
@@ -940,7 +967,8 @@ export async function executeCodeTask(
 
         sendProgress("run_command", `$ ${command}`, codeSource);
 
-        const result = await runShellCommand(command, projectPath, timeoutMs);
+        const result = await runShellCommand(command, projectPath, timeoutMs, sharedProjectId);
+        const sandboxPrefix = result.sandboxed ? "[sandbox: docker]\n" : "";
         const output = [
           result.stdout ? `stdout:\n${result.stdout.slice(0, 8000)}` : "",
           result.stderr ? `stderr:\n${result.stderr.slice(0, 4000)}` : "",
@@ -951,7 +979,7 @@ export async function executeCodeTask(
         const statusLabel = result.ok ? "ok" : "failed";
         sendProgress(
           "run_command",
-          `[${statusLabel}] ${command}\n${output.slice(0, 1000)}`,
+          `[${statusLabel}] ${command}\n${sandboxPrefix}${output.slice(0, 1000)}`,
           codeSource,
         );
 
@@ -959,8 +987,8 @@ export async function executeCodeTask(
           role: "tool",
           tool_call_id: tc.id,
           content: capToolResult(result.ok
-            ? (output || "Command completed successfully (no output)")
-            : `Command failed:\n${output || "Unknown error"}`),
+            ? (sandboxPrefix + (output || "Command completed successfully (no output)"))
+            : `${sandboxPrefix}Command failed:\n${output || "Unknown error"}`),
         });
         continue;
       }

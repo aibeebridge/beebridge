@@ -34,6 +34,7 @@
     "web:restart": "node beebridge.mjs web restart",
     "web:start:daemon": "node beebridge.mjs web start --daemon",
     "web:restart:daemon": "node beebridge.mjs web restart --daemon",
+    "servers:start:daemon": "node beebridge.mjs servers start --daemon",
     "servers:restart:daemon": "node beebridge.mjs servers restart --daemon",
     "start:daemon": "node beebridge.mjs start --daemon"
   }

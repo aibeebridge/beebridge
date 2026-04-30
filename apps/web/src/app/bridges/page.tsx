@@ -49,6 +49,7 @@ type ExportDistrictBundle = {
     beeRosterIds?: string[];
     bridgeLayout?: { x: number; y: number };
     useUpstreamBridgeContext?: boolean;
+    codeProjectId?: string;
     codeProjectPath?: string;
   };
   bees: Array<{
@@ -157,6 +158,9 @@ export default function BridgesPage() {
     startedAt: string;
     finishedAt: string;
     startDistrictId: string;
+    resolvedProjectId?: string;
+    resolvedProjectPath?: string;
+    projectSource?: string;
     orderedTaskIds: string[];
     summary: string;
     districtResults: DistrictResultRow[];
@@ -529,6 +533,8 @@ export default function BridgesPage() {
           : Boolean(rawDistrict.useUpstreamBridgeContext),
       codeProjectPath:
         typeof rawDistrict.codeProjectPath === "string" ? rawDistrict.codeProjectPath : undefined,
+      codeProjectId:
+        typeof rawDistrict.codeProjectId === "string" ? rawDistrict.codeProjectId : undefined,
     };
 
     const bees = Array.isArray(rec.bees)
@@ -1006,7 +1012,19 @@ export default function BridgesPage() {
                     <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
                       Run ID: <code>{run.id}</code> · {run.orderedTaskIds.length}{" "}
                       task{run.orderedTaskIds.length !== 1 ? "s" : ""}
+                      {run.resolvedProjectId ? (
+                        <>
+                          {" "}
+                          · Project: <code>{run.resolvedProjectId}</code>
+                        </>
+                      ) : null}
                     </p>
+                    {run.resolvedProjectPath ? (
+                      <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                        Code path: <code>{run.resolvedProjectPath}</code>
+                        {run.projectSource ? ` (${run.projectSource})` : ""}
+                      </p>
+                    ) : null}
                     {run.districtResults.length > 0 && (
                       <div className="bridge-pipeline-district-results">
                         {run.districtResults.map((dr) => (

@@ -8,6 +8,9 @@ export interface QueueResult {
 
 export type QueueExtras = {
   bridgeContext?: string;
+  resolvedProjectId?: string;
+  resolvedProjectPath?: string;
+  projectSource?: string;
   /** When set, agent uses these instead of task title/description (e.g. {{bridgeOut:taskId}} resolved). */
   resolvedTitle?: string;
   resolvedDescription?: string;

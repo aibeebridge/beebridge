@@ -3,8 +3,9 @@
  * Copies the built monorepo into ~/.beebridge so production runs from a fixed home path.
  * Invoked after `npm run build:release` (see package.json).
  *
- * Preserves local-only files already under ~/.beebridge (gateway token, global config)
- * via rsync --exclude. Requires `rsync` (macOS/Linux).
+ * Preserves local-only files already under ~/.beebridge (gateway token, global config,
+ * and runtime state/history). Runtime data that exists in the source checkout is never
+ * copied into the home install. Requires `rsync` (macOS/Linux).
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -16,26 +17,31 @@ import { execFileSync } from "node:child_process";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dest = path.join(homedir(), ".beebridge");
 
+const sourceRuntimeEntries = [
+  ".beebridge",
+  ".beebridge-data",
+  ".beebridge-daemon",
+  "workspace",
+  "state",
+  "code-projects",
+];
+
 const rsyncExcludes = [
   "/.git",
-  "/.beebridge",
+  ...sourceRuntimeEntries.map((entry) => `/${entry}`),
   "/gateway-token",
   "/config.json",
   "/.env",
-  "/.beebridge-daemon",
-  "/.beebridge-data",
   "node_modules/.cache",
   "apps/web/.next/cache",
 ];
 
 const preservedRootEntries = new Set([
   ".git",
-  ".beebridge",
+  ...sourceRuntimeEntries,
   "gateway-token",
   "config.json",
   ".env",
-  ".beebridge-daemon",
-  ".beebridge-data",
 ]);
 
 function main() {
@@ -63,9 +69,9 @@ function main() {
 function shouldSkipEntry(relPosix) {
   if (preservedRootEntries.has(relPosix)) return true;
   if (relPosix.startsWith(".git/")) return true;
-  if (relPosix.startsWith(".beebridge/")) return true;
-  if (relPosix.startsWith(".beebridge-daemon/")) return true;
-  if (relPosix.startsWith(".beebridge-data/")) return true;
+  for (const entry of sourceRuntimeEntries) {
+    if (relPosix.startsWith(`${entry}/`)) return true;
+  }
   if (relPosix === "node_modules/.cache" || relPosix.startsWith("node_modules/.cache/"))
     return true;
   if (

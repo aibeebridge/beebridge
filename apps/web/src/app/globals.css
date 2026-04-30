@@ -318,7 +318,7 @@ html.sidebar-collapsed .app-main {
 }
 .btn-icon:hover { opacity: 1; background: var(--bg-2, #f0f0f0); }
 
-.btn-secondary:hover { background: var(--panel-2); }
+.btn-secondary:hover { background: var(--panel-2); color: var(--text); }
 
 .btn-text {
   background: none;
@@ -1049,6 +1049,25 @@ html.sidebar-collapsed .app-main {
   color: #fff;
   font-weight: 600;
   cursor: pointer;
+}
+
+.settings-panel button:hover {
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.settings-panel button.btn-secondary {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.settings-panel button.btn-secondary:hover {
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
 }
 
 .settings-error { margin: 0; color: var(--danger); }

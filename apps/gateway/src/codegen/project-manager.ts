@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import type { BeeDistrict, CodeProjectRecord, CodeProjectSource, ResolvedCodeProject } from "@beebridge/core";
 
 interface ProjectMeta {
   taskId: string;
@@ -18,33 +20,41 @@ const IGNORED_DIRS = new Set([
 ]);
 
 export class ProjectManager {
-  constructor(private readonly projectsRoot: string) {
+  private readonly registryFile: string;
+
+  constructor(private readonly projectsRoot: string, stateRoot?: string) {
     if (!fs.existsSync(projectsRoot)) {
       fs.mkdirSync(projectsRoot, { recursive: true });
+    }
+    this.registryFile = path.join(stateRoot ?? path.dirname(projectsRoot), "projects.json");
+    const registryDir = path.dirname(this.registryFile);
+    if (!fs.existsSync(registryDir)) {
+      fs.mkdirSync(registryDir, { recursive: true });
     }
   }
 
   createDistrictProjectDir(districtId: string, title: string): string {
-    const slug = sanitizeSlug(title);
-    const shortId = districtId.replace(/^district-/, "").slice(0, 10);
-    const dirName = slug ? `${slug}_${shortId}` : shortId;
-    const projectPath = path.join(this.projectsRoot, dirName);
-    if (!fs.existsSync(projectPath)) {
-      fs.mkdirSync(projectPath, { recursive: true });
-    }
-    return projectPath;
+    const district: BeeDistrict = {
+      id: districtId,
+      title,
+      objective: "",
+      status: "active",
+      cityId: "",
+    };
+    return this.resolveProjectForDistrict(district).path;
   }
 
   createProjectDir(taskId: string, title: string): string {
-    const slug = sanitizeSlug(title);
-    const shortId = taskId.replace(/^task-/, "").slice(0, 10);
-    const dirName = slug ? `${slug}_${shortId}` : shortId;
-    const projectPath = path.join(this.projectsRoot, dirName);
-
-    if (!fs.existsSync(projectPath)) {
-      fs.mkdirSync(projectPath, { recursive: true });
+    const existing = this.loadRegistry().find((project) => project.id === `project-task-${taskId.replace(/^task-/, "").slice(0, 12)}`);
+    if (existing) {
+      return this.materializeRecord(existing).path;
     }
-
+    const record = this.createProjectRecord({
+      id: `project-task-${taskId.replace(/^task-/, "").slice(0, 12)}`,
+      name: title,
+      source: "auto",
+    });
+    const projectPath = this.materializeRecord(record).path;
     const metaPath = path.join(projectPath, META_FILE);
     if (!fs.existsSync(metaPath)) {
       const meta: ProjectMeta = { taskId, title, createdAt: new Date().toISOString() };
@@ -52,6 +62,163 @@ export class ProjectManager {
     }
 
     return projectPath;
+  }
+
+  listProjects(): CodeProjectRecord[] {
+    return this.loadRegistry().map((project) => this.refreshStatus(project));
+  }
+
+  private loadRegistry(): CodeProjectRecord[] {
+    const raw = readJsonFile<CodeProjectRecord[]>(this.registryFile, []);
+    return Array.isArray(raw) ? raw.filter((project) => project && typeof project.id === "string") : [];
+  }
+
+  private saveRegistry(projects: CodeProjectRecord[]): void {
+    writeJsonFile(this.registryFile, projects);
+  }
+
+  private createProjectRecord(input: CreateProjectInput): CodeProjectRecord {
+    const projects = this.loadRegistry();
+    const now = new Date().toISOString();
+    const baseSlug = sanitizeSlug(input.name) || "project";
+    const slug = this.uniqueDirSlug(baseSlug, projects);
+    const record: CodeProjectRecord = {
+      id: this.uniqueProjectId(input.id, projects),
+      name: input.name || "Project",
+      slug,
+      path: path.join(this.projectsRoot, slug),
+      source: input.source,
+      status: "missing",
+      createdAt: now,
+      updatedAt: now,
+      ...(input.externalProjectId ? { externalProjectId: input.externalProjectId } : {}),
+    };
+    projects.push(record);
+    this.saveRegistry(projects);
+    return record;
+  }
+
+  private materializeRecord(record: CodeProjectRecord): ResolvedCodeProject {
+    const projects = this.loadRegistry();
+    const idx = projects.findIndex((project) => project.id === record.id);
+    const next = idx >= 0 ? { ...projects[idx] } : { ...record };
+    const pathInsideRoot = this.isUnderProjectsRoot(path.resolve(next.path));
+    if (!pathInsideRoot) {
+      next.path = path.join(this.projectsRoot, this.uniqueDirSlug(next.slug || sanitizeSlug(next.name) || "project", projects));
+    }
+    if (!fs.existsSync(next.path)) {
+      fs.mkdirSync(next.path, { recursive: true });
+    }
+    next.status = "ready";
+    next.updatedAt = new Date().toISOString();
+    if (idx >= 0) projects[idx] = next;
+    else projects.push(next);
+    this.saveRegistry(projects);
+    return { id: next.id, name: next.name, path: next.path, source: next.source, status: next.status };
+  }
+
+  private refreshStatus(record: CodeProjectRecord): CodeProjectRecord {
+    const next = { ...record };
+    next.status = fs.existsSync(next.path) ? "ready" : "missing";
+    return next;
+  }
+
+  private isUnderProjectsRoot(candidate: string): boolean {
+    const root = path.resolve(this.projectsRoot);
+    const resolved = path.resolve(candidate);
+    return resolved === root || resolved.startsWith(root + path.sep);
+  }
+
+  private uniqueProjectId(baseId: string, projects: CodeProjectRecord[]): string {
+    const clean = baseId.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || `project-${randomUUID().slice(0, 8)}`;
+    const taken = new Set(projects.map((project) => project.id));
+    if (!taken.has(clean)) return clean;
+    for (let i = 2; i < 1000; i++) {
+      const candidate = `${clean}-${i}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return `${clean}-${randomUUID().slice(0, 8)}`;
+  }
+
+  private uniqueDirSlug(baseSlug: string, projects: CodeProjectRecord[]): string {
+    const clean = sanitizeSlug(baseSlug) || "project";
+    const taken = new Set(projects.map((project) => path.basename(project.path)));
+    if (!taken.has(clean) && !fs.existsSync(path.join(this.projectsRoot, clean))) return clean;
+    for (let i = 2; i < 1000; i++) {
+      const candidate = `${clean}-${i}`;
+      if (!taken.has(candidate) && !fs.existsSync(path.join(this.projectsRoot, candidate))) return candidate;
+    }
+    return `${clean}-${randomUUID().slice(0, 8)}`;
+  }
+
+  resolveProjectForDistrict(district: BeeDistrict): ResolvedCodeProject {
+    const now = new Date().toISOString();
+    const projects = this.loadRegistry();
+
+    if (district.codeProjectId) {
+      const existing = projects.find((project) => project.id === district.codeProjectId);
+      if (existing) {
+        return this.materializeRecord(existing);
+      }
+      const imported = this.createProjectRecord({
+        id: district.codeProjectId,
+        name: district.title,
+        source: "imported_workflow",
+        externalProjectId: district.codeProjectId,
+      });
+      district.codeProjectId = imported.id;
+      return this.materializeRecord(imported);
+    }
+
+    if (district.codeProjectPath) {
+      const legacyPath = path.resolve(district.codeProjectPath);
+      const underProjectsRoot = this.isUnderProjectsRoot(legacyPath);
+      if (underProjectsRoot && fs.existsSync(legacyPath)) {
+        const existing = projects.find((project) => path.resolve(project.path) === legacyPath);
+        if (existing) {
+          district.codeProjectId = existing.id;
+          return this.materializeRecord(existing);
+        }
+        const slug = sanitizeSlug(district.title) || sanitizeSlug(path.basename(legacyPath));
+        const record: CodeProjectRecord = {
+          id: this.uniqueProjectId(`project-legacy-${slug || "project"}`, projects),
+          name: district.title || path.basename(legacyPath),
+          slug: this.uniqueDirSlug(slug || "project", projects),
+          path: legacyPath,
+          source: "legacy_path",
+          status: "ready",
+          createdAt: now,
+          updatedAt: now,
+        };
+        projects.push(record);
+        this.saveRegistry(projects);
+        district.codeProjectId = record.id;
+        return this.materializeRecord(record);
+      }
+      district.codeProjectPath = undefined;
+    }
+
+    const record = this.createProjectRecord({
+      id: `project-district-${district.id.replace(/^district-/, "").slice(0, 12)}`,
+      name: district.title,
+      source: "auto",
+    });
+    district.codeProjectId = record.id;
+    return this.materializeRecord(record);
+  }
+
+  importProjectHint(externalProjectId: string, name: string): CodeProjectRecord {
+    const cleanExternalId = externalProjectId.trim();
+    const existing = this.loadRegistry().find((project) =>
+      project.externalProjectId === cleanExternalId && project.source === "imported_workflow"
+    );
+    if (existing) return existing;
+    return this.createProjectRecord({
+      id: `project-import-${sanitizeSlug(cleanExternalId) || randomUUID().slice(0, 8)}`,
+      name,
+      source: "imported_workflow",
+      externalProjectId: cleanExternalId,
+    });
   }
 
   getProjectRoot(taskId: string): string | null {
@@ -218,6 +385,23 @@ export class ProjectManager {
   }
 }
 
+function readJsonFile<T>(filePath: string, fallback: T): T {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath: string, value: unknown): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 function sanitizeSlug(title: string): string {
   return title
     .toLowerCase()
@@ -227,3 +411,10 @@ function sanitizeSlug(title: string): string {
     .slice(0, 40)
     .replace(/-+$/, "");
 }
+
+type CreateProjectInput = {
+  id: string;
+  name: string;
+  source: CodeProjectSource;
+  externalProjectId?: string;
+};

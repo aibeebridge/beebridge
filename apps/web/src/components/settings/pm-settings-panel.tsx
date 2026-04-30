@@ -32,17 +32,24 @@ type PmModelPolicy = {
   fallbackModel?: string;
 };
 
+type SandboxMode = "off" | "docker";
+
 type SettingsPayload = {
   providers: ProviderCatalogItem[];
   authProfiles: PmAuthProfile[];
   modelPolicy: PmModelPolicy;
   activeProfile: string | null;
+  sandbox?: { mode?: SandboxMode };
 };
 
 type WorkspaceInfo = {
   workspacePath: string;
   dataRoot: string;
+  stateRoot?: string;
+  codeProjectsRoot?: string;
   workspaceRoot: string;
+  projectsRoot?: string;
+  legacyWorkspaceRoot?: string;
   files: string[];
 };
 
@@ -50,6 +57,7 @@ type RuntimeDiagnostics = {
   gateway?: { status?: string; port?: number; cdpRelayPort?: number; authenticated?: boolean; authRequired?: boolean };
   flowers?: { connectedCount?: number; configured?: { id: string; name: string; type: string; enabled: boolean; connected: boolean; lastError?: string }[] };
   cdpRelay?: { connected?: boolean; attachedTabId?: number | null };
+  sandbox?: { enabled?: boolean; mode?: string; scope?: string; image?: string; network?: string; readOnlyRoot?: boolean };
   discord?: { summary?: string };
   jobs?: { activeCount?: number; pendingApprovals?: number };
 };
@@ -119,6 +127,7 @@ export function PmSettingsPanel() {
   const [defaultModel, setDefaultModel] = useState("");
   const [fallbackModel, setFallbackModel] = useState("");
   const [allowedModelsText, setAllowedModelsText] = useState("");
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>("off");
   const [activeTab, setActiveTab] = useState<SettingsTab>("connection");
 
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null);
@@ -189,6 +198,7 @@ export function PmSettingsPanel() {
     setDefaultModel(policy.defaultModel ?? "");
     setFallbackModel(policy.fallbackModel ?? "");
     setAllowedModelsText((policy.allowedModels ?? []).join(", "));
+    setSandboxMode(data.sandbox?.mode === "docker" ? "docker" : "off");
   }, [gatewayToken, gatewayUrl]);
 
   const onConnect = useCallback(async () => {
@@ -486,6 +496,31 @@ export function PmSettingsPanel() {
     loadSettings,
   ]);
 
+  const saveSandboxMode = useCallback(async (mode: SandboxMode) => {
+    setError(null);
+    const response = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/sandbox`, {
+      method: "PUT",
+      headers: authHeader(gatewayToken),
+      body: JSON.stringify({ mode }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.error ?? `Failed to save sandbox mode (${response.status}).`);
+      return;
+    }
+    await loadSettings();
+    setNotice(mode === "docker" ? "Sandbox enabled." : "Sandbox disabled.");
+  }, [gatewayToken, gatewayUrl, loadSettings]);
+
+  const onSaveSandboxMode = useCallback(async () => {
+    await saveSandboxMode(sandboxMode);
+  }, [saveSandboxMode, sandboxMode]);
+
+  const onChangeSandboxMode = useCallback(async (mode: SandboxMode) => {
+    setSandboxMode(mode);
+    await saveSandboxMode(mode);
+  }, [saveSandboxMode]);
+
   const loadWorkspaceInfo = useCallback(async () => {
     try {
       const res = await fetchWithGatewayTimeout(`${gatewayUrl}/api/settings/workspace`, {
@@ -649,6 +684,37 @@ export function PmSettingsPanel() {
               <button type="button" onClick={onConnect}>
                 Connect
               </button>
+              <div style={{ marginTop: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 15 }}>Code sandbox</h4>
+                <div className="field-grid">
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Sandbox mode</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                        <input
+                          type="radio"
+                          name="sandbox-mode"
+                          checked={sandboxMode === "off"}
+                          onChange={() => void onChangeSandboxMode("off")}
+                        />
+                        Off
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                        <input
+                          type="radio"
+                          name="sandbox-mode"
+                          checked={sandboxMode === "docker"}
+                          onChange={() => void onChangeSandboxMode("docker")}
+                        />
+                        Docker
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" className="btn-secondary" onClick={onSaveSandboxMode} style={{ marginTop: 12 }}>
+                  Save sandbox mode
+                </button>
+              </div>
             </section>
           )}
 
@@ -902,11 +968,12 @@ export function PmSettingsPanel() {
 
           {activeTab === "workspace" && (
             <section className="settings-card">
-              <h3>Workspace Configuration</h3>
+              <h3>User Workspace</h3>
               <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted)" }}>
-                All settings, history, and data are stored under this workspace path. If the folder does not exist, it
-                is created. Under it, <code style={{ fontSize: 12 }}>.beebridge/workspace</code> holds districts, jobs,
-                and related files.
+                This is the root folder Beebridge uses for user work. New home installs default to{" "}
+                <code style={{ fontSize: 12 }}>~/.beebridge/workspace</code>; app state is stored under{" "}
+                <code style={{ fontSize: 12 }}>state</code> and generated code under{" "}
+                <code style={{ fontSize: 12 }}>code-projects</code>.
               </p>
               <div className="field-grid">
                 <label>
@@ -934,6 +1001,16 @@ export function PmSettingsPanel() {
                       <strong style={{ fontSize: 12, wordBreak: "break-all" }}>{wsInfo.dataRoot}</strong>
                     </article>
                     <article>
+                      <p>State Root</p>
+                      <strong style={{ fontSize: 12, wordBreak: "break-all" }}>{wsInfo.stateRoot ?? wsInfo.workspaceRoot}</strong>
+                    </article>
+                    <article>
+                      <p>Code Projects</p>
+                      <strong style={{ fontSize: 12, wordBreak: "break-all" }}>
+                        {wsInfo.codeProjectsRoot ?? wsInfo.projectsRoot ?? "-"}
+                      </strong>
+                    </article>
+                    <article>
                       <p>Files</p>
                       <strong>{wsInfo.files.length}</strong>
                     </article>
@@ -941,7 +1018,7 @@ export function PmSettingsPanel() {
                   {wsInfo.files.length > 0 && (
                     <details style={{ marginTop: 10, fontSize: 12 }}>
                       <summary style={{ cursor: "pointer", color: "var(--muted)", fontWeight: 500 }}>
-                        Workspace Files ({wsInfo.files.length})
+                        Beebridge Data Files ({wsInfo.files.length})
                       </summary>
                       <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--muted)", lineHeight: 1.8 }}>
                         {wsInfo.files.map((f) => <li key={f}>{f}</li>)}
@@ -994,6 +1071,24 @@ export function PmSettingsPanel() {
                 <article>
                   <p>Attached tab</p>
                   <strong>{diagnostics?.cdpRelay?.attachedTabId ?? "None"}</strong>
+                </article>
+                <article>
+                  <p>Code sandbox</p>
+                  <strong>
+                    {diagnostics?.sandbox?.enabled
+                      ? `${diagnostics.sandbox.mode ?? "Enabled"} / ${diagnostics.sandbox.scope ?? "project"}`
+                      : "Off"}
+                  </strong>
+                </article>
+                <article>
+                  <p>Sandbox image</p>
+                  <strong style={{ fontSize: 12, wordBreak: "break-all" }}>
+                    {diagnostics?.sandbox?.enabled ? diagnostics.sandbox.image ?? "-" : "-"}
+                  </strong>
+                </article>
+                <article>
+                  <p>Sandbox network</p>
+                  <strong>{diagnostics?.sandbox?.enabled ? diagnostics.sandbox.network ?? "-" : "-"}</strong>
                 </article>
                 <article>
                   <p>Active jobs</p>

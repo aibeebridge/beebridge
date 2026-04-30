@@ -65,10 +65,11 @@ Register **manager** credentials used by PM flows.
 
 ### Workspace (`workspace`)
 
-Data root for districts, jobs, and related files. Copy explains that `.beebridge/workspace` is created under the chosen path.
+User workspace root for Beebridge local data. Home installs default to `~/.beebridge/workspace`. New installs store app state in `state` and generated code projects in `code-projects`; existing nested data is migrated for home installs.
+Code projects are tracked by a registry in `state/projects.json`; imported workflow project IDs are mapped to local project IDs and paths are never imported directly.
 
 - **Change Workspace** — `PUT /api/settings/workspace` with `{ "workspacePath": "..." }`.
-- On tab focus, the UI loads `GET /api/settings/workspace` to show current path, data root, and file list.
+- On tab focus, the UI loads `GET /api/settings/workspace` to show current path, data root, state root, code projects root, and file list.
 
 ### Diagnostics (`status`)
 

@@ -28,6 +28,7 @@ import {
   type DistrictBridge,
   type BridgeGraphMeta,
   type PipelineRunRecord,
+  type ResolvedCodeProject,
   type PmAuthProfile,
   type TaskConversation,
   newBeeId,
@@ -53,6 +54,7 @@ import { executeTaskViaCdp } from "../browser/controller.js";
 import { executeCodeTask } from "../codegen/code-executor.js";
 import { ProjectManager } from "../codegen/project-manager.js";
 import { cleanupAllProcessManagers } from "../codegen/process-manager.js";
+import { sandboxStatus, setSandboxModeProvider } from "../codegen/sandbox.js";
 import { CdpRelayServer } from "../browser/cdp-relay.js";
 import { InteractionChainStore } from "./interaction-chain-store.js";
 import { WorkspaceConfig } from "./workspace-config.js";
@@ -216,11 +218,12 @@ const auditLog = new AuditLog();
 
 const wsConfig = new WorkspaceConfig();
 const dataRoot = wsConfig.dataRoot;
-const workspaceRoot = wsConfig.workspaceRoot;
-const projectManager = new ProjectManager(wsConfig.projectsRoot);
-log("WORKSPACE", `path=${wsConfig.workspacePath} dataRoot=${dataRoot} workspaceRoot=${workspaceRoot} projects=${wsConfig.projectsRoot}`);
+const stateRoot = wsConfig.stateRoot;
+const projectManager = new ProjectManager(wsConfig.codeProjectsRoot, stateRoot);
+log("WORKSPACE", `path=${wsConfig.workspacePath} dataRoot=${dataRoot} stateRoot=${stateRoot} codeProjects=${wsConfig.codeProjectsRoot}`);
 
 const pmSettings = new PmSettingsStore(providerCatalog, dataRoot);
+setSandboxModeProvider(() => pmSettings.getSandboxSettings().mode);
 const jobStore = new JobStore();
 const aiHistory = new AiHistoryStore(dataRoot);
 
@@ -236,10 +239,10 @@ let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let schedulerTickRunning = false;
 if (GATEWAY_PERF_LOG) perfLog("phase: GraphStore ctor start");
 const _tGraphStore = performance.now();
-const graphStore = new GraphStore(workspaceRoot);
+const graphStore = new GraphStore(stateRoot);
 if (GATEWAY_PERF_LOG) perfLog("phase: GraphStore ctor", `done in ${(performance.now() - _tGraphStore).toFixed(1)}ms`);
 const _tChainStore = performance.now();
-const chainStore = new InteractionChainStore(workspaceRoot);
+const chainStore = new InteractionChainStore(stateRoot);
 if (GATEWAY_PERF_LOG) perfLog("phase: InteractionChainStore ctor", `done in ${(performance.now() - _tChainStore).toFixed(1)}ms`);
 
 const flowerConfigStore = new FlowerConfigStore(dataRoot);
@@ -339,17 +342,15 @@ const queue = new ExecutionQueue(async (task: BeeTask, extras?: QueueExtras) => 
   };
 
   if (isCodeTask) {
-    let sharedProjectPath: string | undefined;
-    if (district) {
-      if (district.codeProjectPath) {
-        sharedProjectPath = district.codeProjectPath;
-      } else {
-        sharedProjectPath = projectManager.createDistrictProjectDir(district.id, district.title);
-        district.codeProjectPath = sharedProjectPath;
-        persistWorkspace();
-      }
+    let resolvedProjectId = extras?.resolvedProjectId;
+    let sharedProjectPath = extras?.resolvedProjectPath;
+    if (!sharedProjectPath && district) {
+      const resolvedProject = projectManager.resolveProjectForDistrict(district);
+      resolvedProjectId = resolvedProject.id;
+      sharedProjectPath = resolvedProject.path;
+      persistWorkspace();
     }
-    return executeCodeTask(taskForRun, persona ?? null, taskCtx, projectManager, waggleConfig, extras?.bridgeContext, extras?.bridgeOutMap, 0, sharedProjectPath);
+    return executeCodeTask(taskForRun, persona ?? null, taskCtx, projectManager, waggleConfig, extras?.bridgeContext, extras?.bridgeOutMap, 0, sharedProjectPath, resolvedProjectId);
   }
 
   return executeTaskViaCdp(taskForRun, persona ?? null, taskCtx, waggleConfig, extras?.bridgeContext, extras?.bridgeOutMap);
@@ -377,7 +378,7 @@ setInterval(() => {
 const GITHUB_COPILOT_CLIENT_ID_DEFAULT = "Iv1.b507a08c87ecfe98";
 let latestTeamPlan: TeamPlan | null = null;
 let bridgeGraphMeta: BridgeGraphMeta = { startDistrictId: null };
-const workspaceStore = new WorkspaceStore(workspaceRoot);
+const workspaceStore = new WorkspaceStore(stateRoot);
 
 function persistWorkspace(): void {
   // Single source of truth for job ids is allTasks. Team plan file can drift (partial deletes, old bugs);
@@ -815,6 +816,41 @@ function buildQueueExtrasForBridgeTask(task: BeeTask, completed: CompletedTaskIn
   };
 }
 
+function isCodeTaskLike(task: BeeTask): boolean {
+  const persona = latestTeamPlan?.bees?.find((b) => b.id === task.personaId);
+  return persona?.flowerType === "code" || (!persona && typeof task.flower === "string" && task.flower.endsWith("-code"));
+}
+
+function resolvePipelineProject(ordered: BeeTask[], startDistrictId?: string): ResolvedCodeProject | undefined {
+  const codeTasks = ordered.filter(isCodeTaskLike);
+  const firstCodeTask = codeTasks[0];
+  if (!firstCodeTask) return undefined;
+  const codeDistricts = codeTasks
+    .map((task) => allDistricts.get(String(task.districtId ?? "").trim()))
+    .filter((district): district is BeeDistrict => Boolean(district));
+  const explicitProjectIds = new Set(codeDistricts.map((district) => district.codeProjectId).filter(Boolean));
+  if (explicitProjectIds.size > 1) {
+    return undefined;
+  }
+  if (explicitProjectIds.size === 1) {
+    const projectId = [...explicitProjectIds][0];
+    const district = codeDistricts.find((candidate) => candidate.codeProjectId === projectId);
+    if (!district) return undefined;
+    const resolved = projectManager.resolveProjectForDistrict(district);
+    persistWorkspace();
+    return resolved;
+  }
+  const preferredDistrictId =
+    startDistrictId && allDistricts.has(startDistrictId)
+      ? startDistrictId
+      : String(firstCodeTask.districtId ?? "").trim();
+  const district = preferredDistrictId ? allDistricts.get(preferredDistrictId) : undefined;
+  if (!district) return undefined;
+  const resolved = projectManager.resolveProjectForDistrict(district);
+  persistWorkspace();
+  return resolved;
+}
+
 let queueRunning = false;
 
 function parseIsoMs(value?: string): number | undefined {
@@ -1245,6 +1281,10 @@ async function runApprovedJobsInner(
   if (usedBridgeOrder) {
     log("QUEUE", `bridge order: ${ordered.map((t) => t.districtId).join(" → ")}`);
   }
+  const pipelineProject =
+    opts?.auditSource === "bridge-pipeline" || opts?.savePipelineHistory
+      ? resolvePipelineProject(ordered, opts?.savePipelineHistory?.startDistrictId ?? bridgeGraphMeta.startDistrictId ?? undefined)
+      : undefined;
 
   const completed: CompletedTaskInfo[] = [];
 
@@ -1264,7 +1304,16 @@ async function runApprovedJobsInner(
         taskTitle: task.title,
       });
     },
-    getExtras: (task) => buildQueueExtrasForBridgeTask(task, completed),
+    getExtras: (task) => ({
+      ...buildQueueExtrasForBridgeTask(task, completed),
+      ...(pipelineProject && isCodeTaskLike(task)
+        ? {
+            resolvedProjectId: pipelineProject.id,
+            resolvedProjectPath: pipelineProject.path,
+            projectSource: pipelineProject.source,
+          }
+        : {}),
+    }),
     afterEach: (task, r) => {
       completed.push({
         districtId: String(task.districtId ?? "").trim() || UNASSIGNED_DISTRICT_ID,
@@ -1339,6 +1388,13 @@ async function runApprovedJobsInner(
       startedAt: runStartedAt,
       finishedAt: new Date().toISOString(),
       startDistrictId: opts.savePipelineHistory.startDistrictId,
+      ...(pipelineProject
+        ? {
+            resolvedProjectId: pipelineProject.id,
+            resolvedProjectPath: pipelineProject.path,
+            projectSource: pipelineProject.source,
+          }
+        : {}),
       orderedTaskIds: ordered.map((t) => t.id),
       summary,
       districtResults: [...districtResults.values()],
@@ -1595,6 +1651,7 @@ app.get("/api/settings/pm", requireAuth, (_req, res) => {
     authProfiles: pmSettings.listProfiles(),
     activeProfile: pmSettings.getActiveProfile()?.id ?? null,
     beePolicy: pmSettings.get().beePolicy,
+    sandbox: pmSettings.getSandboxSettings(),
   });
 });
 
@@ -2005,6 +2062,21 @@ app.put("/api/settings/model-policy", requireAuth, (req, res) => {
   });
   log("MODEL", `policy updated: provider=${updated.defaultProviderId} model=${updated.defaultModel} allowed=${updated.allowedModels.length}`);
   res.json({ modelPolicy: updated });
+});
+
+app.put("/api/settings/sandbox", requireAuth, (req, res) => {
+  const mode = String(req.body?.mode ?? "").trim().toLowerCase();
+  if (mode !== "off" && mode !== "docker") {
+    res.status(400).json({ error: "mode must be off or docker" });
+    return;
+  }
+  const sandbox = pmSettings.setSandboxMode(mode);
+  auditLog.record({
+    type: "pm.sandbox.mode.updated",
+    payload: { mode: sandbox.mode },
+  });
+  log("SANDBOX", `mode updated: ${sandbox.mode}`);
+  res.json({ sandbox });
 });
 
 type FailureKind =
@@ -2432,6 +2504,40 @@ app.get("/api/settings/workspace", requireAuth, (_req, res) => {
   res.json(wsConfig.info());
 });
 
+app.get("/api/projects", requireAuth, (_req, res) => {
+  const projects = projectManager.listProjects();
+  res.json({ projects, count: projects.length });
+});
+
+app.post("/api/projects", requireAuth, (req, res) => {
+  const title = String(req.body?.title ?? req.body?.name ?? "").trim();
+  if (!title) {
+    res.status(400).json({ error: "title is required" });
+    return;
+  }
+  const district: BeeDistrict = {
+    id: `district-project-${randomUUID().slice(0, 8)}`,
+    title,
+    objective: "",
+    status: "active",
+    cityId: latestTeamPlan?.id ?? "",
+  };
+  const project = projectManager.resolveProjectForDistrict(district);
+  res.json({ project });
+});
+
+app.post("/api/projects/resolve", requireAuth, (req, res) => {
+  const districtId = String(req.body?.districtId ?? "").trim();
+  if (!districtId || !allDistricts.has(districtId)) {
+    res.status(400).json({ error: "unknown_district" });
+    return;
+  }
+  const district = allDistricts.get(districtId)!;
+  const project = projectManager.resolveProjectForDistrict(district);
+  persistWorkspace();
+  res.json({ project, district });
+});
+
 app.put("/api/settings/workspace", requireAuth, (req, res) => {
   const newPath = String(req.body.workspacePath ?? "").trim();
   if (!newPath) { res.status(400).json({ error: "workspacePath is required" }); return; }
@@ -2651,8 +2757,9 @@ function normalizeImportedDistrict(
   if (raw.useUpstreamBridgeContext !== undefined) {
     district.useUpstreamBridgeContext = Boolean(raw.useUpstreamBridgeContext);
   }
-  if (typeof raw.codeProjectPath === "string" && raw.codeProjectPath.trim()) {
-    district.codeProjectPath = raw.codeProjectPath.trim();
+  if (typeof raw.codeProjectId === "string" && raw.codeProjectId.trim()) {
+    const hintedProject = projectManager.importProjectHint(raw.codeProjectId.trim(), title);
+    district.codeProjectId = hintedProject.id;
   }
   return district;
 }
@@ -3058,6 +3165,7 @@ app.get("/api/diagnostics/runtime", requireAuth, (req, res) => {
       connected: cdpRelay.isExtensionConnected(),
       attachedTabId: cdpRelay.getAttachedTabId(),
     },
+    sandbox: sandboxStatus(),
     discord: {
       summary: discordMgr?.getRuntimeSummary() ?? "discord_flower_bots_ready: 0",
     },
@@ -3967,6 +4075,10 @@ function buildChatRuntimeContextForPrompt(): string {
   } catch {
     lines.push("Workspace path: (unavailable)");
   }
+  const sandbox = sandboxStatus();
+  lines.push(
+    `Code sandbox: ${sandbox.enabled ? `docker image=${sandbox.image} network=${sandbox.network} readOnlyRoot=${sandbox.readOnlyRoot}` : "off"}`,
+  );
 
   const policy = pmSettings.getModelPolicy();
   const active = pmSettings.getActiveProfile();

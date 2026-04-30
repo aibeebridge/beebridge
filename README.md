@@ -166,6 +166,16 @@ The Next.js app resolves the gateway token on the server (shared persistence and
 
 More options (`.env` examples, CORS, auth mode): [`INSTALL.md`](INSTALL.md).
 
+### Code sandbox
+
+Code Flower `run_command` calls can run inside Docker instead of directly on the gateway host:
+
+```bash
+BEEBRIDGE_SANDBOX_MODE=docker beebridge gateway start
+```
+
+Defaults are intentionally restrictive: image `node:22-bookworm-slim`, `--network none`, read-only container root, writable code-project mount at `/project`, project-scoped persistent containers, and tmpfs for `/tmp`, `/var/tmp`, and `/run`. Use `BEEBRIDGE_SANDBOX_NETWORK=bridge` only when tasks need dependency downloads. Optional knobs: `BEEBRIDGE_SANDBOX_SCOPE=task`, `BEEBRIDGE_SANDBOX_IMAGE`, `BEEBRIDGE_SANDBOX_MEMORY`, `BEEBRIDGE_SANDBOX_CPUS`, `BEEBRIDGE_SANDBOX_PIDS_LIMIT`, `BEEBRIDGE_SANDBOX_READ_ONLY_ROOT=0`.
+
 ## Project structure
 
 ```
@@ -175,7 +185,7 @@ beebridge/
 │   │   └── src/
 │   │       ├── server/   # API, stores, Discord flower manager, chat routing
 │   │       ├── browser/  # CDP relay, Flower commands, waggle, LLM client
-│   │       ├── codegen/  # Code executor, project/subtask/process managers
+│   │       ├── codegen/  # Code executor, code-project/subtask/process managers
 │   │       ├── auth/
 │   │       └── settings/
 │   ├── web/              # @beebridge/web -- Next.js dashboard

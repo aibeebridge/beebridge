@@ -19,6 +19,7 @@ export type {
   PmAuthProfile,
   PmModelPolicy,
   PmSettings,
+  PmSandboxSettings,
   ProviderAuthMode,
   ProviderCatalogItem,
   PlannedTask,
@@ -35,6 +36,10 @@ export type {
   DistrictBridgeLayout,
   BridgeGraphMeta,
   PipelineRunRecord,
+  CodeProjectRecord,
+  CodeProjectSource,
+  CodeProjectStatus,
+  ResolvedCodeProject,
   BridgeDirection,
   BridgeStatus,
   // Legacy aliases
