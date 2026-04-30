@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { killSandboxProcess, type SandboxProcessHandle } from "./sandbox.js";
 
 interface ProcessSession {
   proc: ChildProcess;
+  sandbox?: SandboxProcessHandle;
   output: string[];
   exitCode: number | null;
   startedAt: number;
@@ -79,6 +81,7 @@ export class ProcessManager {
 
     const session: ProcessSession = {
       proc,
+      sandbox: (proc as ChildProcess & { sandbox?: SandboxProcessHandle }).sandbox,
       output: [],
       exitCode: null,
       startedAt: Date.now(),
@@ -130,6 +133,9 @@ export class ProcessManager {
     const session = this.sessions.get(sessionId);
     if (!session) return `Session not found: ${sessionId}`;
     if (session.exitCode !== null) return `Process already exited with code ${session.exitCode}`;
+    if (session.sandbox) {
+      killSandboxProcess(session.sandbox);
+    }
     killProcessTree(session.proc, "SIGTERM");
     setTimeout(() => {
       if (session.exitCode === null) killProcessTree(session.proc, "SIGKILL");
@@ -175,6 +181,9 @@ export class ProcessManager {
     if (killRunning) {
       for (const [, session] of this.sessions) {
         if (session.exitCode === null) {
+          if (session.sandbox) {
+            killSandboxProcess(session.sandbox);
+          }
           killProcessTree(session.proc, "SIGKILL");
         }
       }

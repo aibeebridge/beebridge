@@ -151,7 +151,17 @@ Does **not** stop existing listeners first — use **`servers restart --daemon`*
 
 | Subcommand | Options | Description |
 |------------|---------|-------------|
+| `start` | `--gateway-port`, `--web-port`, **`-d` / `--daemon` (required)**, `--dev`, `-o` / `--open` | Start gateway and web as background daemons after clearing the target ports. |
 | `restart` | `--gateway-port`, `--web-port`, **`-d` / `--daemon` (required)**, `--dev`, `-o` / `--open` | Stop gateway and web ports, then start **gateway first**, then **web**. Use **`--daemon`** to run both in the background in one terminal; for foreground logs, use **`gateway restart`** and **`web restart`** in two terminals instead. |
+
+### `sandbox`
+
+| Subcommand | Options | Description |
+|------------|---------|-------------|
+| `list` | -- | List Beebridge Docker sandbox containers tracked by gateway labels. |
+| `remove <target>` | -- | Remove a sandbox container by container name, id, or background session id. |
+| `kill <session-id>` | -- | Kill sandbox containers for a managed background process session. |
+| `cleanup` | `--include-project` | Remove task/background sandbox containers. Persistent project-scope containers are kept unless `--include-project` is passed. |
 
 ### `gateway`
 

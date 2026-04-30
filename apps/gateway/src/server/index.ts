@@ -54,7 +54,14 @@ import { executeTaskViaCdp } from "../browser/controller.js";
 import { executeCodeTask } from "../codegen/code-executor.js";
 import { ProjectManager } from "../codegen/project-manager.js";
 import { cleanupAllProcessManagers } from "../codegen/process-manager.js";
-import { sandboxStatus, setSandboxModeProvider } from "../codegen/sandbox.js";
+import {
+  cleanupSandboxContainers,
+  killSandboxSession,
+  listSandboxContainers,
+  removeSandboxContainer,
+  sandboxStatus,
+  setSandboxModeProvider,
+} from "../codegen/sandbox.js";
 import { CdpRelayServer } from "../browser/cdp-relay.js";
 import { InteractionChainStore } from "./interaction-chain-store.js";
 import { WorkspaceConfig } from "./workspace-config.js";
@@ -2079,6 +2086,46 @@ app.put("/api/settings/sandbox", requireAuth, (req, res) => {
   res.json({ sandbox });
 });
 
+app.get("/api/sandbox/containers", requireAuth, (_req, res) => {
+  try {
+    res.json({ containers: listSandboxContainers() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/sandbox/remove", requireAuth, (req, res) => {
+  const target = String(req.body?.target ?? "").trim();
+  if (!target) {
+    res.status(400).json({ error: "target is required" });
+    return;
+  }
+  const result = removeSandboxContainer(target);
+  res.status(result.removed ? 200 : 404).json(result);
+});
+
+app.post("/api/sandbox/kill", requireAuth, (req, res) => {
+  const sessionId = String(req.body?.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "sessionId is required" });
+    return;
+  }
+  const result = killSandboxSession(sessionId);
+  res.status(result.killed ? 200 : 404).json(result);
+});
+
+app.post("/api/sandbox/cleanup", requireAuth, (req, res) => {
+  const includeProject = req.body?.includeProject === true;
+  try {
+    const result = cleanupSandboxContainers({ includeProject });
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
 type FailureKind =
   | "auth"
   | "flower_offline"
@@ -3165,7 +3212,16 @@ app.get("/api/diagnostics/runtime", requireAuth, (req, res) => {
       connected: cdpRelay.isExtensionConnected(),
       attachedTabId: cdpRelay.getAttachedTabId(),
     },
-    sandbox: sandboxStatus(),
+    sandbox: {
+      ...sandboxStatus(),
+      containerCount: (() => {
+        try {
+          return listSandboxContainers().length;
+        } catch {
+          return null;
+        }
+      })(),
+    },
     discord: {
       summary: discordMgr?.getRuntimeSummary() ?? "discord_flower_bots_ready: 0",
     },
@@ -4531,6 +4587,13 @@ function gracefulShutdown() {
   log("SERVER", "shutting down, flushing stores...");
   const killed = cleanupAllProcessManagers();
   if (killed > 0) log("SERVER", `killed ${killed} background child process(es)`);
+  try {
+    const cleaned = cleanupSandboxContainers({ includeProject: false });
+    if (cleaned.removed.length > 0) log("SERVER", `removed ${cleaned.removed.length} task sandbox container(s)`);
+    for (const err of cleaned.errors) log("SERVER", `sandbox cleanup failed: ${err}`);
+  } catch (e) {
+    log("SERVER", `sandbox cleanup failed: ${e}`);
+  }
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
   stopInternalScheduler();
   try { persistWorkspace(); } catch (e) { log("SERVER", `persistWorkspace failed: ${e}`); }

@@ -122,6 +122,7 @@ Requires a built CLI (**`npm run build:release`** includes it). After **`npm lin
 | `gateway start` \| `restart` | Production gateway (`start:gateway`). **`--dev`** → `dev:gateway`. **`--daemon`** → background; logs under `.beebridge-daemon/gateway-<port>.log` |
 | `web start` \| `restart` | Production web (`start:web`). **`--dev`** → `dev:web`. **`--daemon`**, **`--open`** (open `/dashboard`) |
 | `servers restart` | Stop both ports, then start gateway + web (**`--daemon`** required) |
+| `sandbox list` \| `remove` \| `kill` \| `cleanup` | Inspect and clean Beebridge Docker sandbox containers through the gateway |
 | `web settings`, `manager setup` | Open **Settings** in the browser; **`--dev`** optional |
 | `stop` | **`SIGTERM`** anything listening on **4321** (gateway) and **3000** (web); override with **`--gateway-port`** / **`--web-port`** |
 | `gateway token` | Print the current gateway auth token (same file as `~/.beebridge/gateway-token` when auto-generated) |
@@ -175,6 +176,8 @@ BEEBRIDGE_SANDBOX_MODE=docker beebridge gateway start
 ```
 
 Defaults are intentionally restrictive: image `node:22-bookworm-slim`, `--network none`, read-only container root, writable code-project mount at `/project`, project-scoped persistent containers, and tmpfs for `/tmp`, `/var/tmp`, and `/run`. Use `BEEBRIDGE_SANDBOX_NETWORK=bridge` only when tasks need dependency downloads. Optional knobs: `BEEBRIDGE_SANDBOX_SCOPE=task`, `BEEBRIDGE_SANDBOX_IMAGE`, `BEEBRIDGE_SANDBOX_MEMORY`, `BEEBRIDGE_SANDBOX_CPUS`, `BEEBRIDGE_SANDBOX_PIDS_LIMIT`, `BEEBRIDGE_SANDBOX_READ_ONLY_ROOT=0`.
+
+Manage sandbox containers with `beebridge sandbox list`, `beebridge sandbox remove <container-or-session>`, `beebridge sandbox kill <session-id>`, and `beebridge sandbox cleanup`. Cleanup removes task/background containers by default; pass `--include-project` to remove persistent project-scope containers too.
 
 ## Project structure
 

@@ -20,6 +20,7 @@ import {
   managerSettingsShow,
 } from "./commands/manager-settings.js";
 import { restartGatewayUi, startGatewayUi } from "./commands/gateway.js";
+import { sandboxCleanup, sandboxKill, sandboxList, sandboxRemove } from "./commands/sandbox.js";
 import { restartServers, startServers } from "./commands/servers.js";
 import { stopBeebridgeServers } from "./commands/stop.js";
 import { openSettingsUi, restartWebUi, startWebUi } from "./commands/web.js";
@@ -210,6 +211,32 @@ servers
       dev: opts.dev,
       open: opts.open,
     });
+  });
+
+const sandbox = program.command("sandbox").description("Docker sandbox container management");
+sandbox.command("list").description("List Beebridge sandbox containers").action(async () => {
+  await sandboxList();
+});
+sandbox
+  .command("remove")
+  .description("Remove a sandbox container by container name, id, or session id")
+  .argument("<target>", "container name, id, or session id")
+  .action(async (target) => {
+    await sandboxRemove(target);
+  });
+sandbox
+  .command("kill")
+  .description("Kill sandbox containers for a background session id")
+  .argument("<session-id>", "background process session id")
+  .action(async (sessionId) => {
+    await sandboxKill(sessionId);
+  });
+sandbox
+  .command("cleanup")
+  .description("Remove task/background sandbox containers")
+  .option("--include-project", "also remove persistent project-scope sandbox containers")
+  .action(async ({ includeProject }) => {
+    await sandboxCleanup({ includeProject });
   });
 
 const gateway = program.command("gateway").description("Gateway API / WebSocket server");
